@@ -1,0 +1,716 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Virtual Buzzer</title>
+  <style>
+    :root {
+      --bg-dark: #121314;
+      --card-bg: #1e2022;
+      --card-border: #3a3d40;
+      --accent-orange: #ff6900;
+      --accent-green: #25ae67;
+      --accent-blue: #3a67ad;
+      --danger-red: #d9381e;
+      --text-white: #ffffff;
+      --text-muted: #a0a3a6;
+      --input-bg: #121314;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; user-select: none; }
+    body { background: var(--bg-dark); color: var(--text-white); width: 100vw; height: 100vh; display: flex; flex-direction: column; overflow: hidden; padding: 16px; gap: 14px; }
+
+    header { display: flex; flex-direction: column; gap: 10px; background: var(--card-bg); padding: 16px; border-radius: 12px; border: 1px solid var(--card-border); }
+
+    .header-top { display: flex; justify-content: space-between; align-items: center; }
+    .player-title { font-size: 1.1rem; font-weight: 800; color: var(--accent-orange); text-transform: uppercase; letter-spacing: 0.05em; }
+    .header-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+
+    .back-link {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 32px; height: 32px; flex-shrink: 0;
+      border-radius: 8px; border: 1px solid var(--card-border);
+      background: var(--input-bg); color: var(--text-muted);
+      text-decoration: none; font-size: 1.15rem; font-weight: 800; line-height: 1;
+      transition: all 0.15s ease;
+    }
+    .back-link:hover, .back-link:active { color: var(--accent-orange); border-color: var(--accent-orange); }
+
+    .status-badge { font-size: 0.8rem; padding: 4px 12px; border-radius: 16px; background: var(--card-border); color: var(--text-muted); font-weight: 700; }
+    .status-badge.connected { background: rgba(37, 174, 103, 0.2); color: #72efb0; border: 1px solid var(--accent-green); }
+    .status-badge.disconnected { background: rgba(217, 56, 30, 0.2); color: #ff8e7d; border: 1px solid var(--danger-red); }
+
+    .name-input-bar { display: flex; gap: 8px; align-items: center; }
+    .name-input-bar input {
+      flex-grow: 1; padding: 10px 12px; font-size: 1rem; border-radius: 6px;
+      border: 1px solid var(--card-border); background: var(--input-bg);
+      color: var(--text-white); font-weight: 700; user-select: text;
+    }
+    .name-input-bar input:focus { outline: none; border-color: var(--accent-orange); }
+    .name-input-bar button {
+      padding: 10px 16px; font-size: 0.9rem; background: var(--accent-orange);
+      color: #fff; border: none; border-radius: 6px; cursor: pointer; font-weight: 800; text-transform: uppercase;
+    }
+
+    /* Participation / assignment strip */
+    .info-strip {
+      display: flex; justify-content: space-between; align-items: center; gap: 10px;
+      background: var(--card-bg); border: 1px solid var(--card-border); border-radius: 10px;
+      padding: 10px 14px; font-size: 0.82rem; font-weight: 700;
+    }
+    .info-strip .assignment { color: var(--text-muted); }
+    .info-strip .assignment.active { color: #72efb0; }
+    .info-strip .assignment.waiting { color: #fde047; }
+    .info-strip .assignment.blocked { color: #ff8e7d; }
+    .sync-meter { color: #6b6e72; font-family: ui-monospace, monospace; font-size: 0.75rem; white-space: nowrap; }
+    .sync-meter.good { color: #72efb0; }
+    .sync-meter.fair { color: #fde047; }
+    .sync-meter.poor { color: #ff8e7d; }
+
+    /* Host-disabled notice */
+    .host-notice {
+      display: none; background: rgba(217, 56, 30, 0.18); border: 1px solid var(--danger-red);
+      border-radius: 10px; padding: 12px 14px; font-size: 0.9rem; font-weight: 700;
+      color: #ffb4a7; text-align: center; line-height: 1.4;
+    }
+    .host-notice.visible { display: block; }
+    .host-notice.waiting { background: rgba(250, 204, 21, 0.15); border-color: #facc15; color: #fde68a; }
+
+    .countdown-banner {
+      background: var(--card-bg); border: 2px solid var(--card-border); border-radius: 12px;
+      padding: 16px; display: flex; align-items: center; justify-content: center; gap: 12px;
+      font-size: 1.3rem; font-weight: 800; transition: all 0.2s ease; text-align: center;
+    }
+
+    .countdown-banner.stage-red { background: rgba(217, 56, 30, 0.25); color: #ff4d4d; border-color: #ff4d4d; }
+    .countdown-banner.stage-purple { background: rgba(192, 132, 252, 0.25); color: #c084fc; border-color: #c084fc; }
+    .countdown-banner.stage-orange { background: rgba(251, 146, 60, 0.25); color: #fb923c; border-color: #fb923c; }
+    .countdown-banner.stage-live { background: rgba(37, 174, 103, 0.3); color: #4ade80; border-color: #4ade80; }
+    .countdown-banner.stage-foul { background: rgba(217, 56, 30, 0.3); color: #ff4d4d; border-color: #ff4d4d; }
+    .countdown-banner.stage-early { background: rgba(250, 204, 21, 0.25); color: #fde047; border-color: #facc15; }
+    .countdown-banner.stage-result { background: rgba(58, 103, 173, 0.28); color: #93c5fd; border-color: var(--accent-blue); }
+
+    .buzzer-area { flex-grow: 1; display: flex; align-items: center; justify-content: center; }
+
+    .buzz-button {
+      width: 80vw; height: 80vw; max-width: 320px; max-height: 320px; border-radius: 50%; border: none;
+      background: linear-gradient(145deg, #2a2d32, #18191b);
+      box-shadow: 0 12px 30px rgba(0,0,0,0.6), inset 0 2px 4px rgba(255,255,255,0.1);
+      color: #53565a; font-size: 2.5rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.05em;
+      cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      transition: all 0.15s ease; touch-action: manipulation;
+    }
+
+    .buzz-button.armed {
+      background: linear-gradient(145deg, #ff7a1a, #e65c00); color: #ffffff;
+      box-shadow: 0 0 30px rgba(255, 105, 0, 0.5), inset 0 2px 6px rgba(255,255,255,0.4);
+    }
+
+    .buzz-button.live {
+      background: linear-gradient(145deg, #2ecc71, #27ae60); color: #ffffff;
+      box-shadow: 0 0 40px rgba(46, 204, 113, 0.8), inset 0 2px 6px rgba(255,255,255,0.4);
+    }
+
+    .buzz-button.foul {
+      background: linear-gradient(145deg, #e74c3c, #c0392b); color: #ffffff;
+      box-shadow: 0 0 30px rgba(231, 76, 60, 0.6);
+    }
+
+    .buzz-button.sent {
+      background: linear-gradient(145deg, #3a67ad, #27497d); color: #ffffff;
+      box-shadow: 0 0 30px rgba(58, 103, 173, 0.6);
+    }
+
+    .buzz-button .sub-label { font-size: 0.85rem; font-weight: 700; letter-spacing: 0.04em; margin-top: 8px; opacity: 0.85; text-transform: none; }
+
+    .buzz-button:active:not(:disabled) { transform: scale(0.94); }
+    .buzz-button:disabled { cursor: not-allowed; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="header-top">
+      <div class="header-left">
+        <a href="/" class="back-link" title="Back to Portal" aria-label="Back to Portal">&#8592;</a>
+        <div class="player-title" data-brand-heading>Virtual Buzzer</div>
+      </div>
+      <div id="status-badge" class="status-badge disconnected">Disconnected</div>
+    </div>
+    <div class="name-input-bar">
+      <input type="text" id="player-name-input" placeholder="Enter Your Name" maxlength="24">
+      <button onclick="updatePlayerName()">Save</button>
+    </div>
+  </header>
+
+  <div class="info-strip">
+    <span id="assignment-label" class="assignment">Not assigned</span>
+    <span id="sync-meter" class="sync-meter">sync --</span>
+  </div>
+
+  <div id="host-notice" class="host-notice"></div>
+
+  <div id="countdown-banner" class="countdown-banner">
+    <span id="countdown-text">Waiting for Round...</span>
+  </div>
+
+  <div class="buzzer-area">
+    <button id="buzz-btn" class="buzz-button" disabled onpointerdown="handleBuzz(event)">
+      <span id="buzz-btn-text">BUZZ</span>
+      <span id="buzz-btn-sub" class="sub-label"></span>
+    </button>
+  </div>
+
+  <script>
+    // ------------------------------------------------------------------
+    // BRANDING
+    // window.APP_CONFIG is injected by the server from config.json. The
+    // fallbacks below keep the page working if it is opened directly from
+    // disk or served by something that doesn't inject it.
+    // ------------------------------------------------------------------
+    const BRAND_FALLBACK = { mascot: '🔔', accentColor: '#ff6900', storagePrefix: 'buzzer' };
+    const PAGE_FALLBACK = { title: 'Virtual Buzzer', heading: 'Virtual Buzzer' };
+
+    const CONFIG = {
+      brand: Object.assign({}, BRAND_FALLBACK, (window.APP_CONFIG || {}).brand),
+      page: Object.assign({}, PAGE_FALLBACK, (window.APP_CONFIG || {}).page)
+    };
+    const MASCOT = CONFIG.brand.mascot;
+    const STORAGE_PREFIX = CONFIG.brand.storagePrefix;
+
+    function applyBranding() {
+      document.title = CONFIG.page.title;
+      document.documentElement.style.setProperty('--accent-orange', CONFIG.brand.accentColor);
+      const headingEl = document.querySelector('[data-brand-heading]');
+      if (headingEl) headingEl.textContent = CONFIG.page.heading;
+    }
+    applyBranding();
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const SERVER_URL = `${protocol}//${window.location.host}`;
+
+    // ------------------------------------------------------------------
+    // Clock sync tuning - mirrors the ESP firmware so web and hardware
+    // buzzers are calibrated the same way.
+    //   - initial burst of samples, keep the one with the lowest RTT
+    //   - periodic re-sync smoothed with an EMA (ALPHA)
+    //   - never re-sync while the light sequence is running
+    // ------------------------------------------------------------------
+    const SYNC_BURST_SAMPLES = 5;       // firmware uses 3; browsers jitter more
+    const SYNC_BURST_SPACING_MS = 90;
+    const RESYNC_INTERVAL_MS = 60000;   // matches firmware RESYNC_INTERVAL_MS
+    const SYNC_EMA_ALPHA = 0.25;        // matches firmware ALPHA
+    const MAX_PLAUSIBLE_RTT_MS = 2000;
+    const RECONNECT_DELAY_MS = 2000;
+    const BLOCKED_RECONNECT_DELAY_MS = 5000;
+
+    let socket;
+    let hardwareId = localStorage.getItem(`${STORAGE_PREFIX}_player_hwid`) || `Virtual_${Math.floor(1000 + Math.random() * 9000)}`;
+    localStorage.setItem(`${STORAGE_PREFIX}_player_hwid`, hardwareId);
+
+    let displayName = localStorage.getItem(`${STORAGE_PREFIX}_player_name`) || hardwareId;
+    document.getElementById('player-name-input').value = displayName;
+
+    let syncStartTime = null;
+    let greenTargetTime = null;
+    let animFrameId = null;
+    let hasFouled = false;
+    let hasBuzzedThisRound = false;
+    let lightSequenceActive = false;
+
+    // Clock sync state
+    let clockOffsetMs = 0;
+    let isCalibrated = false;
+    let bestRttMs = null;
+    let burstSamples = [];
+    let pendingSamples = new Map();   // sampleIndex -> t0
+    let sampleCounter = 0;
+    let resyncTimer = null;
+    let burstTimer = null;
+
+    // Participation state
+    let virtualEnabled = false;
+    let myTeamId = 'unassigned';
+    let myTeamName = null;
+    let blockedByHost = false;
+    let earlyNudgeTimer = null;
+
+    // The server clock is the single source of truth for the countdown.
+    // Using the raw device clock here is what made the lights fire early
+    // or late on phones whose time was off.
+    function serverNow() {
+      return Date.now() + clockOffsetMs;
+    }
+
+    // ==================================================================
+    // CLOCK SYNC
+    // ==================================================================
+    function sendSyncSample(isPeriodic) {
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      sampleCounter++;
+      const t0 = Date.now();
+      pendingSamples.set(sampleCounter, t0);
+      socket.send(JSON.stringify({
+        type: 'SYNC_REQUEST',
+        playerId: hardwareId,
+        t0: t0,
+        sampleIndex: sampleCounter,
+        isPeriodic: !!isPeriodic
+      }));
+    }
+
+    function startSyncBurst() {
+      if (burstTimer) { clearTimeout(burstTimer); burstTimer = null; }
+      burstSamples = [];
+      let sent = 0;
+      const fire = () => {
+        burstTimer = null;
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        sendSyncSample(false);
+        sent++;
+        if (sent < SYNC_BURST_SAMPLES) burstTimer = setTimeout(fire, SYNC_BURST_SPACING_MS);
+      };
+      fire();
+    }
+
+    function scheduleResync() {
+      if (resyncTimer) clearInterval(resyncTimer);
+      resyncTimer = setInterval(() => {
+        // Firmware suppresses periodic sync during the light sequence; a
+        // mid-countdown offset shift would move the green light underfoot.
+        if (lightSequenceActive) {
+          // Safety valve: if a round is opened and never reset, don't stay
+          // suppressed forever and let the clock drift unchecked.
+          if (greenTargetTime && (serverNow() - greenTargetTime) > 120000) {
+            lightSequenceActive = false;
+          } else {
+            return;
+          }
+        }
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        sendSyncSample(true);
+      }, RESYNC_INTERVAL_MS);
+    }
+
+    function handleSyncResponse(data) {
+      const t3 = Date.now();
+      const t0 = pendingSamples.has(data.sampleIndex) ? pendingSamples.get(data.sampleIndex) : data.t0;
+      pendingSamples.delete(data.sampleIndex);
+
+      if (typeof t0 !== 'number' || typeof data.t1 !== 'number' || typeof data.t2 !== 'number') return;
+
+      const rtt = (t3 - t0) - (data.t2 - data.t1);
+      const offset = ((data.t1 - t0) + (data.t2 - t3)) / 2;
+
+      // Discard obviously bad samples rather than letting them poison the offset.
+      if (rtt < 0 || rtt > MAX_PLAUSIBLE_RTT_MS) return;
+
+      if (data.isPeriodic && isCalibrated) {
+        clockOffsetMs = Math.round((SYNC_EMA_ALPHA * offset) + ((1 - SYNC_EMA_ALPHA) * clockOffsetMs));
+        bestRttMs = Math.round(rtt);
+      } else {
+        burstSamples.push({ rtt, offset });
+        // Adopt the lowest-RTT sample; queuing delay only ever inflates
+        // RTT, so the fastest round trip is the least skewed estimate.
+        let best = burstSamples[0];
+        for (const s of burstSamples) if (s.rtt < best.rtt) best = s;
+
+        // While still uncalibrated, improve progressively so the buzzer is
+        // usable immediately. Once calibrated, only a completed burst is
+        // allowed to replace a known-good offset.
+        if (!isCalibrated || burstSamples.length >= SYNC_BURST_SAMPLES) {
+          clockOffsetMs = Math.round(best.offset);
+          bestRttMs = Math.round(best.rtt);
+        }
+        if (burstSamples.length >= SYNC_BURST_SAMPLES) isCalibrated = true;
+      }
+
+      renderSyncMeter();
+    }
+
+    function renderSyncMeter() {
+      const el = document.getElementById('sync-meter');
+      if (bestRttMs === null) {
+        el.textContent = 'sync --';
+        el.className = 'sync-meter';
+        return;
+      }
+      let quality = 'good';
+      if (bestRttMs > 250) quality = 'poor';
+      else if (bestRttMs > 100) quality = 'fair';
+
+      const sign = clockOffsetMs >= 0 ? '+' : '';
+      el.textContent = `sync ${bestRttMs}ms · off ${sign}${clockOffsetMs}ms`;
+      el.className = `sync-meter ${quality}`;
+    }
+
+    // ==================================================================
+    // CONNECTION
+    // ==================================================================
+    function connect() {
+      socket = new WebSocket(SERVER_URL);
+
+      socket.onopen = () => {
+        const badge = document.getElementById('status-badge');
+        badge.textContent = 'Connected';
+        badge.className = 'status-badge connected';
+
+        isCalibrated = false;
+        burstSamples = [];
+        pendingSamples.clear();
+
+        startSyncBurst();
+        scheduleResync();
+        sendNameToServer();
+      };
+
+      socket.onclose = () => {
+        const badge = document.getElementById('status-badge');
+        badge.textContent = blockedByHost ? 'Buzzers Off' : 'Disconnected';
+        badge.className = 'status-badge disconnected';
+
+        if (resyncTimer) { clearInterval(resyncTimer); resyncTimer = null; }
+        if (burstTimer) { clearTimeout(burstTimer); burstTimer = null; }
+
+        // When the host has web buzzers switched off the server closes us
+        // immediately. Back off so we are not hammering it, but keep
+        // retrying so the buzzer comes back to life on its own.
+        setTimeout(connect, blockedByHost ? BLOCKED_RECONNECT_DELAY_MS : RECONNECT_DELAY_MS);
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          handleMessage(JSON.parse(event.data));
+        } catch (e) {
+          console.error("Failed to parse message", e);
+        }
+      };
+    }
+
+    function updatePlayerName() {
+      const inputEl = document.getElementById('player-name-input');
+      const newName = inputEl.value.trim();
+      if (!newName) return;
+
+      displayName = newName;
+      localStorage.setItem(`${STORAGE_PREFIX}_player_name`, displayName);
+
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        connect();
+      } else {
+        sendNameToServer();
+      }
+
+      inputEl.style.borderColor = 'var(--accent-green)';
+      setTimeout(() => { inputEl.style.borderColor = 'var(--card-border)'; }, 1500);
+    }
+
+    function sendNameToServer() {
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      const mappings = {};
+      // Only ever claim our own hardware id, never anyone else's.
+      mappings[hardwareId] = { displayName: displayName, teamId: myTeamId };
+      socket.send(JSON.stringify({ type: 'UPDATE_MAPPINGS', mappings: mappings }));
+    }
+
+    function handleMessage(data) {
+      switch (data.type) {
+        case 'SYNC_RESPONSE':
+          handleSyncResponse(data);
+          break;
+
+        case 'AUTH_ERROR':
+          // Host has web buzzers disabled entirely (BCP off).
+          blockedByHost = true;
+          showHostNotice('🔒 Virtual buzzers are turned off.<br>Ask the host to enable virtual buzzers.', false);
+          setParticipationLockout('Buzzers Off');
+          break;
+
+        case 'DEVICE_LIST_UPDATE':
+          applyDeviceList(data);
+          break;
+
+        case 'SCHEDULED_TIMER_START':
+          syncStartTime = data.syncStartTime;
+          greenTargetTime = data.greenTargetTime;
+          hasFouled = false;
+          hasBuzzedThisRound = false;
+          lightSequenceActive = true;
+          startCountdownUI();
+          break;
+
+        case 'ROUND_RESET':
+          stopTimerUI();
+          hasFouled = false;
+          hasBuzzedThisRound = false;
+          lightSequenceActive = false;
+          resetBuzzerUI();
+          // Firmware re-calibrates after every round; do the same.
+          startSyncBurst();
+          break;
+
+        case 'PREMATURE_RESET':
+          // Pressed before the sequence opened. The server records no foul
+          // for this, and the firmware simply re-arms, so we match that
+          // instead of locking the player out for the round.
+          showEarlyNudge();
+          break;
+
+        case 'FOUL_EVENT':
+          // A real early buzz inside the countdown. The server keeps this
+          // on record and will ignore our later presses, so lock out.
+          if (data.foul && data.foul.hardwareId === hardwareId) {
+            triggerFoulState(data.foul);
+          }
+          break;
+
+        case 'RANKINGS_UPDATE':
+          showMyResult(data.rankings);
+          break;
+      }
+    }
+
+    // ==================================================================
+    // PARTICIPATION STATE
+    // ==================================================================
+    function applyDeviceList(data) {
+      if (typeof data.virtualEnabled === 'boolean') virtualEnabled = data.virtualEnabled;
+
+      const me = (data.devices || []).find(d => (d.hardwareId || d.playerId) === hardwareId);
+      if (me) {
+        myTeamId = me.teamId || 'unassigned';
+        myTeamName = me.teamName || null;
+      }
+
+      // Getting a device list at all means the socket was accepted.
+      blockedByHost = false;
+      renderParticipation();
+    }
+
+    function renderParticipation() {
+      const label = document.getElementById('assignment-label');
+
+      if (!virtualEnabled || myTeamId === 'ignore') {
+        label.textContent = 'Not in play';
+        label.className = 'assignment blocked';
+        showHostNotice('🔒 Virtual buzzers are turned off.<br>Ask the host to enable virtual buzzers.', false);
+        setParticipationLockout('Buzzers Off');
+        return;
+      }
+
+      if (myTeamId === 'unassigned') {
+        label.textContent = 'Awaiting team assignment';
+        label.className = 'assignment waiting';
+        showHostNotice('⏳ You are connected but not on a team yet.<br>Ask the host to assign you.', true);
+        setParticipationLockout('Not Assigned');
+        return;
+      }
+
+      label.textContent = `Playing for ${myTeamName || `Team ${myTeamId}`}`;
+      label.className = 'assignment active';
+      hideHostNotice();
+
+      // Eligible again - restore whatever the round state implies.
+      if (!lightSequenceActive && !hasFouled && !hasBuzzedThisRound) resetBuzzerUI();
+    }
+
+    function showHostNotice(html, isWaiting) {
+      const notice = document.getElementById('host-notice');
+      notice.innerHTML = html;
+      notice.className = `host-notice visible${isWaiting ? ' waiting' : ''}`;
+    }
+
+    function hideHostNotice() {
+      document.getElementById('host-notice').className = 'host-notice';
+    }
+
+    function setParticipationLockout(labelText) {
+      stopTimerUI();
+      const banner = document.getElementById('countdown-banner');
+      const btn = document.getElementById('buzz-btn');
+
+      banner.className = 'countdown-banner';
+      document.getElementById('countdown-text').textContent = '🔒 Buzzer Inactive';
+
+      btn.className = 'buzz-button';
+      btn.disabled = true;
+      document.getElementById('buzz-btn-text').textContent = labelText;
+      document.getElementById('buzz-btn-sub').textContent = '';
+    }
+
+    function isEligible() {
+      return virtualEnabled && myTeamId !== 'ignore' && myTeamId !== 'unassigned';
+    }
+
+    // ==================================================================
+    // ROUND UI
+    // ==================================================================
+    function triggerFoulState(foul) {
+      hasFouled = true;
+      stopTimerUI();
+
+      const banner = document.getElementById('countdown-banner');
+      banner.className = 'countdown-banner stage-foul';
+      const early = foul && typeof foul.earlyMs === 'number'
+        ? ` (${(foul.earlyMs / 1000).toFixed(3)}s early)`
+        : '';
+      document.getElementById('countdown-text').textContent = `⚠️ Early Foul!${early}`;
+
+      const btn = document.getElementById('buzz-btn');
+      btn.className = 'buzz-button foul';
+      btn.disabled = true;
+      document.getElementById('buzz-btn-text').textContent = 'FOUL';
+      document.getElementById('buzz-btn-sub').textContent = 'Locked out this round';
+    }
+
+    function showEarlyNudge() {
+      if (hasFouled) return;
+
+      // The press was rejected outright, so it does not count as our buzz.
+      hasBuzzedThisRound = false;
+
+      const banner = document.getElementById('countdown-banner');
+      const btn = document.getElementById('buzz-btn');
+
+      banner.className = 'countdown-banner stage-early';
+      document.getElementById('countdown-text').textContent = '✋ Too early - still armed';
+
+      // Re-arm, exactly like the hardware buzzer does.
+      if (isEligible()) {
+        btn.disabled = false;
+        btn.className = lightSequenceActive ? 'buzz-button armed' : 'buzz-button';
+        document.getElementById('buzz-btn-text').textContent = 'BUZZ';
+        document.getElementById('buzz-btn-sub').textContent = '';
+      }
+
+      if (earlyNudgeTimer) clearTimeout(earlyNudgeTimer);
+      earlyNudgeTimer = setTimeout(() => {
+        if (hasFouled) return;
+        if (lightSequenceActive) startCountdownUI();
+        else resetBuzzerUI();
+      }, 1600);
+    }
+
+    function showMyResult(rankings) {
+      if (!rankings || hasFouled) return;
+      const mine = rankings.find(r => r.hardwareId === hardwareId);
+      if (!mine) return;
+
+      const banner = document.getElementById('countdown-banner');
+      banner.className = 'countdown-banner stage-result';
+      document.getElementById('countdown-text').textContent =
+        `#${mine.rank} · ${(mine.reactionTimeMs / 1000).toFixed(3)}s`;
+
+      const btn = document.getElementById('buzz-btn');
+      btn.className = 'buzz-button sent';
+      btn.disabled = true;
+      document.getElementById('buzz-btn-text').textContent = `#${mine.rank}`;
+      document.getElementById('buzz-btn-sub').textContent =
+        mine.behindWinnerMs === 0 ? 'First in!' : `+${mine.behindWinnerMs.toFixed(0)}ms behind`;
+    }
+
+    function resetBuzzerUI() {
+      const banner = document.getElementById('countdown-banner');
+      const btn = document.getElementById('buzz-btn');
+
+      if (!isEligible()) {
+        renderParticipation();
+        return;
+      }
+
+      banner.className = 'countdown-banner';
+      document.getElementById('countdown-text').textContent = `${MASCOT} Waiting for Round...`;
+
+      btn.className = 'buzz-button';
+      btn.disabled = true;
+      document.getElementById('buzz-btn-text').textContent = 'BUZZ';
+      document.getElementById('buzz-btn-sub').textContent = '';
+    }
+
+    function startCountdownUI() {
+      stopTimerUI();
+      if (hasFouled) return;
+      if (!isEligible()) { renderParticipation(); return; }
+
+      const banner = document.getElementById('countdown-banner');
+      const textEl = document.getElementById('countdown-text');
+      const btn = document.getElementById('buzz-btn');
+      const btnText = document.getElementById('buzz-btn-text');
+
+      btn.disabled = false;
+      btn.className = 'buzz-button armed';
+      btnText.textContent = 'BUZZ';
+      document.getElementById('buzz-btn-sub').textContent = '';
+
+      function updateDisplay() {
+        if (hasFouled || hasBuzzedThisRound) return;
+
+        // Server clock, not device clock.
+        const now = serverNow();
+        const syncRemainingSec = Math.ceil((syncStartTime - now) / 1000);
+        const msUntilGreen = greenTargetTime - now;
+
+        if (syncRemainingSec > 0) {
+          banner.className = 'countdown-banner';
+          textEl.textContent = `${MASCOT} ${syncRemainingSec}s Syncing...`;
+          animFrameId = requestAnimationFrame(updateDisplay);
+        } else if (msUntilGreen > 0) {
+          if (msUntilGreen > 2000) {
+            banner.className = 'countdown-banner stage-red';
+            textEl.textContent = '3 🔴 Ready...';
+          } else if (msUntilGreen > 1000) {
+            banner.className = 'countdown-banner stage-purple';
+            textEl.textContent = '2 🟣 Set...';
+          } else {
+            banner.className = 'countdown-banner stage-orange';
+            textEl.textContent = '1 🟠 Get Ready!';
+          }
+          animFrameId = requestAnimationFrame(updateDisplay);
+        } else {
+          if (hasFouled) return;
+          banner.className = 'countdown-banner stage-live';
+          textEl.textContent = '🚀 GO! 🟢 BUZZ NOW!';
+          btn.className = 'buzz-button live';
+        }
+      }
+      animFrameId = requestAnimationFrame(updateDisplay);
+    }
+
+    function stopTimerUI() {
+      if (animFrameId) {
+        cancelAnimationFrame(animFrameId);
+        animFrameId = null;
+      }
+    }
+
+    function handleBuzz(e) {
+      if (e) e.preventDefault();
+
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      if (hasFouled || hasBuzzedThisRound || !isEligible()) return;
+
+      // Timestamp first, before any UI work touches the main thread.
+      const pressTime = Date.now();
+
+      hasBuzzedThisRound = true;
+      stopTimerUI();
+
+      const btn = document.getElementById('buzz-btn');
+      btn.className = 'buzz-button sent';
+      btn.disabled = true;
+      document.getElementById('buzz-btn-text').textContent = 'SENT';
+      document.getElementById('buzz-btn-sub').textContent = 'Waiting for ranking...';
+
+      socket.send(JSON.stringify({
+        type: 'BUZZ',
+        playerId: hardwareId,
+        clientPressTime: pressTime,
+        clockOffset: clockOffsetMs
+      }));
+    }
+
+    connect();
+  </script>
+</body>
+</html>

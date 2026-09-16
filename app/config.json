@@ -1,0 +1,33 @@
+{
+  "brand": {
+    "organizationName": "ACME",
+    "productName": "Jeopardy!",
+    "mascot": "🦊",
+    "accentColor": "#ff6900",
+    "storagePrefix": "acme"
+  },
+  "portal": {
+    "title": "{app} Portal",
+    "heading": "{app}",
+    "subtitle": "{productBase} Buzzer Console Portal",
+    "footer": "{appBase} System • Hardware & Cloud Synchronized"
+  },
+  "pages": {
+    "host": {
+      "title": "{app} Host Console",
+      "heading": "{app} Host Console"
+    },
+    "mobile": {
+      "title": "{app} Mobile Host Console",
+      "heading": "Host Mobile"
+    },
+    "tv": {
+      "title": "{app} TV Display",
+      "heading": "{app}"
+    },
+    "virtual": {
+      "title": "{org} Virtual Buzzer",
+      "heading": "Virtual Buzzer"
+    }
+  }
+}

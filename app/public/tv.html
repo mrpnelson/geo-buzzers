@@ -1,0 +1,761 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>TV Display</title>
+  <style>
+    :root {
+      --bg-dark: #1e2022;
+      --card-bg: #2d3033;
+      --card-border: #4a4d52;
+      --accent-orange: #ff6900;
+      --accent-green: #25ae67;
+      --accent-blue: #3a67ad;
+      --accent-yellow: #facc15;
+      --danger-red: #d9381e;
+      --text-white: #ffffff;
+      --text-muted: #a0a3a6;
+    }
+
+    * { 
+      box-sizing: border-box; 
+      margin: 0; 
+      padding: 0; 
+      font-family: system-ui, -apple-system, sans-serif; 
+    }
+    
+    body { 
+      background: var(--bg-dark); 
+      color: var(--text-white); 
+      width: 100vw;
+      height: 100vh;
+      margin: 0;
+      padding: 16px 20px;
+      overflow: hidden; 
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    /* Top Header Bar */
+    header { 
+      display: flex; 
+      justify-content: space-between; 
+      align-items: center; 
+      padding: 10px 20px; 
+      background: var(--card-bg);
+      border-radius: 10px;
+      border: 1px solid var(--card-border); 
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      flex-shrink: 0;
+    }
+
+    h1 { 
+      font-size: 1.8rem; 
+      font-weight: 900; 
+      color: var(--accent-orange); 
+      text-transform: uppercase; 
+      letter-spacing: 0.05em; 
+    }
+
+    .header-right { display: flex; align-items: center; gap: 16px; }
+    .header-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
+
+    /* Kept deliberately dim so it does not draw the eye on a venue screen. */
+    .back-link {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 34px; height: 34px; flex-shrink: 0;
+      border-radius: 8px; border: 1px solid var(--card-border);
+      background: #121314; color: var(--text-muted);
+      text-decoration: none; font-size: 1.2rem; font-weight: 800; line-height: 1;
+      opacity: 0.35; transition: all 0.15s ease;
+    }
+    .back-link:hover { opacity: 1; color: var(--accent-orange); border-color: var(--accent-orange); }
+    
+    .timer-display {
+      font-size: 1.5rem;
+      text-align: center;
+      padding: 6px 20px;
+      background: #121314;
+      border-radius: 8px;
+      color: var(--accent-orange);
+      border: 2px solid var(--card-border);
+      font-weight: 800;
+      min-width: 260px;
+    }
+
+    .status-badge { font-size: 0.95rem; padding: 6px 16px; border-radius: 20px; background: var(--card-border); color: var(--text-muted); font-weight: 700; }
+    .status-badge.connected { background: rgba(37, 174, 103, 0.25); color: #72efb0; border: 1px solid var(--accent-green); }
+    .status-badge.disconnected { background: rgba(217, 56, 30, 0.25); color: #ff8e7d; border: 1px solid var(--danger-red); }
+
+    /* Active Buzzer Roster Strip */
+    .roster-strip {
+      background: var(--card-bg);
+      border-radius: 10px;
+      border: 1px solid var(--card-border);
+      padding: 8px 16px;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+      flex-shrink: 0;
+    }
+
+    .roster-title {
+      font-size: 0.85rem;
+      font-weight: 900;
+      color: var(--accent-orange);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      white-space: nowrap;
+      border-right: 2px solid var(--card-border);
+      padding-right: 14px;
+    }
+
+    .roster-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      flex-grow: 1;
+      align-items: center;
+      overflow-x: auto;
+    }
+
+    .buzzer-badge {
+      background: #191b1d;
+      border: 1px solid var(--card-border);
+      border-radius: 6px;
+      padding: 4px 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.95rem;
+      transition: all 0.2s ease;
+    }
+
+    .buzzer-badge .dot {
+      width: 9px;
+      height: 9px;
+      border-radius: 50%;
+      background: var(--accent-green);
+      box-shadow: 0 0 6px var(--accent-green);
+    }
+
+    .buzzer-badge .player-name { font-weight: 800; color: var(--text-white); }
+    .buzzer-badge .team-tag {
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: var(--accent-orange);
+      background: rgba(255, 105, 0, 0.15);
+      padding: 2px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+    }
+
+    .roster-empty { color: var(--text-muted); font-style: italic; font-size: 0.9rem; }
+
+    /* ==========================================================================
+       ANIMATED FOX COUNTDOWN HERO BANNER (TOP-CENTER OVERLAY)
+       ========================================================================== */
+    .hero-countdown-overlay {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(135deg, #17191b, #2b2e33);
+      border: 3px solid var(--accent-orange);
+      border-radius: 16px;
+      padding: 16px 30px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.6), 0 0 20px rgba(255, 105, 0, 0.3);
+      flex-shrink: 0;
+      animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero-countdown-content {
+      display: flex;
+      align-items: center;
+      gap: 24px;
+      z-index: 2;
+    }
+
+    .fox-avatar {
+      font-size: 4rem;
+      display: inline-block;
+      filter: drop-shadow(0 4px 8px rgba(0,0,0,0.5));
+      transition: transform 0.2s ease;
+    }
+
+    /* Animated Poses */
+    .fox-waiting { animation: foxBounce 2s infinite ease-in-out; }
+    .fox-ready { animation: foxAlert 0.4s infinite alternate ease-in-out; }
+    .fox-live { animation: foxJump 0.5s infinite alternate cubic-bezier(0.68, -0.55, 0.265, 1.55); }
+
+    .countdown-text-group {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+    }
+
+    .countdown-phase-label {
+      font-size: 1rem;
+      font-weight: 900;
+      color: var(--accent-orange);
+      text-transform: uppercase;
+      letter-spacing: 0.15em;
+    }
+
+    .countdown-main-number {
+      font-size: 3.5rem;
+      font-weight: 900;
+      line-height: 1;
+      margin-top: 4px;
+      text-shadow: 0 0 12px rgba(255,255,255,0.4);
+    }
+
+    /* Dynamic Stage Colors */
+    .stage-sync { color: var(--accent-orange); }
+    .stage-red { color: #ff4d4d; animation: pulseGlow 0.5s infinite alternate; }
+    .stage-purple { color: #c084fc; animation: pulseGlow 0.5s infinite alternate; }
+    .stage-orange { color: #fb923c; animation: pulseGlow 0.5s infinite alternate; }
+    .stage-live { color: #4ade80; text-shadow: 0 0 20px #22c55e; }
+
+    /* Keyframe Animations */
+    @keyframes popIn {
+      0% { transform: scale(0.8); opacity: 0; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+
+    @keyframes foxBounce {
+      0%, 100% { transform: translateY(0) rotate(0deg); }
+      50% { transform: translateY(-6px) rotate(-3deg); }
+    }
+
+    @keyframes foxAlert {
+      0% { transform: scale(1) rotate(-4deg); }
+      100% { transform: scale(1.1) rotate(4deg); }
+    }
+
+    @keyframes foxJump {
+      0% { transform: translateY(0) scale(1); }
+      100% { transform: translateY(-16px) scale(1.25); }
+    }
+
+    @keyframes pulseGlow {
+      0% { transform: scale(0.98); opacity: 0.8; }
+      100% { transform: scale(1.04); opacity: 1; }
+    }
+
+    /* Event Banners */
+    #event-feed { display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
+    .winner-banner, .foul-banner, .premature-banner {
+      border-radius: 10px; 
+      padding: 12px 20px;
+      display: flex; 
+      justify-content: space-between; 
+      align-items: center;
+      box-shadow: 0 6px 16px rgba(0,0,0,0.4);
+    }
+    
+    .winner-banner { 
+      background: linear-gradient(135deg, #1e3a8a, var(--accent-blue)); 
+      border: 2px solid #ffffff; 
+      animation: pulse-border 0.6s infinite alternate;
+    }
+    .foul-banner { background: linear-gradient(135deg, #7f1d1d, var(--danger-red)); border: 2px solid #ff8e7d; }
+    .premature-banner { background: linear-gradient(135deg, #713f12, var(--accent-orange)); border: 2px solid var(--accent-yellow); }
+
+    .banner-title { font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 800; }
+    .banner-name { font-size: 1.8rem; font-weight: 900; line-height: 1.1; margin-top: 2px; color: var(--text-white); }
+    .banner-sub { font-size: 1.05rem; margin-top: 2px; color: #dbeafe; }
+    .banner-stat { font-size: 1.7rem; font-family: monospace; font-weight: 900; text-align: right; color: var(--text-white); }
+
+    /* Main Content Grid */
+    .main-content {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 16px;
+      flex-grow: 1;
+      min-height: 0;
+    }
+
+    .card { 
+      background: var(--card-bg); 
+      border-radius: 10px; 
+      padding: 16px; 
+      border: 1px solid var(--card-border); 
+      box-shadow: 0 6px 18px rgba(0,0,0,0.3); 
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .card h2 { 
+      font-size: 1.15rem; 
+      margin-bottom: 8px; 
+      color: var(--accent-orange); 
+      text-transform: uppercase; 
+      letter-spacing: 0.08em; 
+      font-weight: 800;
+      border-bottom: 2px solid var(--card-border);
+      padding-bottom: 6px;
+      flex-shrink: 0;
+    }
+
+    .table-container { flex-grow: 1; overflow-y: auto; }
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th { padding: 10px 12px; border-bottom: 2px solid var(--card-border); color: var(--text-muted); font-size: 0.95rem; text-transform: uppercase; }
+    td { padding: 12px 12px; border-bottom: 1px solid var(--card-border); font-size: 1.15rem; }
+
+    .rank-1 { color: #ffffff; font-weight: 900; background: rgba(255, 105, 0, 0.25); }
+    .rank-1 td:first-child::before { content: "🔔 "; }
+    .foul-row { color: #ff8e7d; font-weight: bold; }
+    .empty-state { text-align: center; padding: 30px; color: var(--text-muted); font-size: 1.1rem; font-style: italic; }
+
+    .clue-overlay {
+      position: fixed;
+      top: 0; left: 0;
+      width: 100vw; height: 100vh;
+      background-color: var(--bg-dark);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 5% 10%;
+      box-sizing: border-box;
+      z-index: 1000;
+    }
+
+    .clue-text {
+      font-family: 'Georgia', 'Times New Roman', serif;
+      color: var(--text-white);
+      font-size: 4.5vw;
+      line-height: 1.3;
+      text-align: center;
+      text-transform: uppercase;
+      text-shadow: 
+        1px 1px 1px #000,
+        3px 3px 6px rgba(0,0,0,0.8),
+        2px 2px 3px #000;
+    }
+
+    @keyframes pulse-border {
+      0% { box-shadow: 0 0 0 0 rgba(255, 105, 0, 0.8); }
+      100% { box-shadow: 0 0 0 16px rgba(255, 105, 0, 0); }
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="header-left">
+      <a href="/" class="back-link" title="Back to Portal" aria-label="Back to Portal">&#8592;</a>
+      <h1 data-brand-heading>Buzzer System</h1>
+    </div>
+    <div class="header-right">
+      <div id="timer-box" class="timer-display">Ready to Sync</div>
+      <div id="connection-status" class="status-badge disconnected">Disconnected</div>
+    </div>
+  </header>
+
+  <!-- Active Buzzer Roster Strip -->
+  <div class="roster-strip">
+    <div class="roster-title">Active Roster</div>
+    <div id="roster-grid" class="roster-grid">
+      <span class="roster-empty">No buzzers connected...</span>
+    </div>
+  </div>
+
+  <!-- ANIMATED HERO COUNTDOWN CARD (TOP-CENTER) -->
+  <div id="hero-countdown" class="hero-countdown-overlay">
+    <div class="hero-countdown-content">
+      <span id="fox-mascot" class="fox-avatar fox-waiting"></span>
+      <div class="countdown-text-group">
+        <span id="hero-phase-title" class="countdown-phase-label">GET READY</span>
+        <span id="hero-number" class="countdown-main-number stage-sync">READY</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Live Event Spotlights -->
+  <div id="event-feed">
+    <div id="winner-spotlight" class="winner-banner" style="display: none;">
+      <div>
+        <div class="banner-title" style="color: #93c5fd;">Active Buzz In</div>
+        <div id="winner-name" class="banner-name"></div>
+        <div id="winner-team" class="banner-sub"></div>
+      </div>
+      <div>
+        <div class="banner-title" style="color: #93c5fd; text-align: right;">Reaction Time</div>
+        <div id="winner-time" class="banner-stat">+0.240s</div>
+      </div>
+    </div>
+
+    <div id="foul-spotlight" class="foul-banner" style="display: none;">
+      <div>
+        <div class="banner-title" style="color: #fca5a5;">⚠️ Early Buzz Foul</div>
+        <div id="foul-name" class="banner-name"></div>
+        <div id="foul-team" class="banner-sub" style="color: #fecaca;"></div>
+      </div>
+      <div>
+        <div class="banner-title" style="color: #fca5a5; text-align: right;">Buzzed Early By</div>
+        <div id="foul-time" class="banner-stat" style="color: #fecaca;">0.240s</div>
+      </div>
+    </div>
+
+    <div id="premature-spotlight" class="premature-banner" style="display: none;">
+      <div>
+        <div class="banner-title" style="color: #fde047;">⚡ Premature Button Press</div>
+        <div id="premature-name" class="banner-name"></div>
+        <div id="premature-msg" class="banner-sub" style="color: #fef08a; font-style: italic;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Content Grid -->
+  <div class="main-content">
+    <div class="card">
+      <h2>Live Buzz Order</h2>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Rank</th>
+              <th>Player</th>
+              <th>Team</th>
+              <th>Reaction</th>
+              <th>Behind 1st</th>
+            </tr>
+          </thead>
+          <tbody id="rankings-table">
+            <tr><td colspan="5" class="empty-state">Waiting for question to start...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Early Buzz Fouls</h2>
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Player</th>
+              <th>Team</th>
+              <th>Penalty Time</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="fouls-table">
+            <tr><td colspan="4" class="empty-state">No early buzzes recorded.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Full Screen Clue Overlay Modal -->
+  <div id="clue-modal" class="clue-overlay" style="display: none;">
+    <p id="clue-modal-text" class="clue-text"></p>
+  </div>
+
+  <script>
+    const host = window.location.hostname || 'localhost';
+    // ------------------------------------------------------------------
+    // BRANDING
+    // window.APP_CONFIG is injected by the server from config.json. The
+    // fallbacks below keep the page working if it is opened directly from
+    // disk or served by something that doesn't inject it.
+    // ------------------------------------------------------------------
+    const BRAND_FALLBACK = { mascot: '🔔', accentColor: '#ff6900', storagePrefix: 'buzzer' };
+    const PAGE_FALLBACK = { title: 'TV Display', heading: 'Buzzer System' };
+
+    const CONFIG = {
+      brand: Object.assign({}, BRAND_FALLBACK, (window.APP_CONFIG || {}).brand),
+      page: Object.assign({}, PAGE_FALLBACK, (window.APP_CONFIG || {}).page)
+    };
+    const MASCOT = CONFIG.brand.mascot;
+    const STORAGE_PREFIX = CONFIG.brand.storagePrefix;
+
+    function applyBranding() {
+      document.title = CONFIG.page.title;
+      document.documentElement.style.setProperty('--accent-orange', CONFIG.brand.accentColor);
+      const headingEl = document.querySelector('[data-brand-heading]');
+      if (headingEl) headingEl.textContent = CONFIG.page.heading;
+    }
+    applyBranding();
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const SERVER_URL = `${protocol}//${window.location.host}`;
+    
+    let socket;
+    let animFrameId = null;
+    let syncStartTime = null;
+    let greenTargetTime = null;
+    let foulsList = [];
+    let prematureTimeout = null;
+
+    function init() {
+      connect();
+    }
+
+    function escapeHTML(str) {
+      if (!str) return '';
+      return String(str).replace(/[&<>'"]/g, 
+        tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
+      );
+    }
+
+    function connect() {
+      socket = new WebSocket(SERVER_URL);
+
+      socket.onopen = () => {
+        const badge = document.getElementById('connection-status');
+        badge.textContent = 'TV Display Online';
+        badge.className = 'status-badge connected';
+      };
+
+      socket.onclose = () => {
+        const badge = document.getElementById('connection-status');
+        badge.textContent = 'Offline (Retrying)';
+        badge.className = 'status-badge disconnected';
+        setTimeout(connect, 2000);
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+          handleServerMessage(data);
+        } catch (e) {
+          console.error("Failed to parse socket message", e);
+        }
+      };
+    }
+
+    function handleServerMessage(data) {
+      switch (data.type) {
+        case 'DEVICE_LIST_UPDATE':
+          renderRoster(data.devices || data.players);
+          break;
+
+        case 'SCHEDULED_TIMER_START':
+          syncStartTime = data.syncStartTime;
+          greenTargetTime = data.greenTargetTime;
+          startCountdownUI();
+          clearTables();
+          document.getElementById('winner-spotlight').style.display = 'none';
+          document.getElementById('foul-spotlight').style.display = 'none';
+          document.getElementById('premature-spotlight').style.display = 'none';
+          break;
+
+        case 'ROUND_RESET':
+          stopTimerUI();
+          document.getElementById('hero-countdown').style.display = 'none';
+          document.getElementById('timer-box').textContent = 'Ready to Sync';
+          document.getElementById('timer-box').style.color = 'var(--accent-orange)';
+          document.getElementById('winner-spotlight').style.display = 'none';
+          document.getElementById('foul-spotlight').style.display = 'none';
+          document.getElementById('premature-spotlight').style.display = 'none';
+          document.getElementById('clue-modal').style.display = 'none';
+          clearTables();
+          foulsList = [];
+          break;
+
+        case 'SHOW_CLUE':
+          showClueOverlay(data.clueText);
+          break;
+
+        case 'PREMATURE_PRESS':
+          showPrematureSpotlight(data);
+          break;
+
+        case 'FOUL_EVENT':
+          foulsList.push(data.foul);
+          renderFouls(foulsList);
+          showFoulSpotlight(data.foul);
+          break;
+
+        case 'RANKINGS_UPDATE':
+          renderRankings(data.rankings);
+          showWinnerSpotlight(data.rankings[0]);
+          break;
+      }
+    }
+
+    function renderRoster(devices) {
+      const rosterContainer = document.getElementById('roster-grid');
+      if (!devices || devices.length === 0) {
+        rosterContainer.innerHTML = `<span class="roster-empty">No buzzers connected...</span>`;
+        return;
+      }
+
+      rosterContainer.innerHTML = devices.map(d => {
+        const name = escapeHTML(d.displayName || d.playerId || 'Buzzer');
+        const team = escapeHTML(d.teamName || 'Solo');
+        const statusClass = d.status || 'online';
+
+        return `
+          <div class="buzzer-badge">
+            <span class="dot ${statusClass}"></span>
+            <span class="player-name">${name}</span>
+            <span class="team-tag">${team}</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function showClueOverlay(text) {
+      const modal = document.getElementById('clue-modal');
+      const clueEl = document.getElementById('clue-modal-text');
+      clueEl.textContent = text;
+      modal.style.display = 'flex';
+    }
+
+    function startCountdownUI() {
+      stopTimerUI();
+      const heroCard = document.getElementById('hero-countdown');
+      const foxMascot = document.getElementById('fox-mascot');
+      const heroTitle = document.getElementById('hero-phase-title');
+      const heroNumber = document.getElementById('hero-number');
+      const timerTextEl = document.getElementById('timer-box');
+
+      heroCard.style.display = 'flex';
+
+      function updateDisplay() {
+        const now = Date.now();
+        const syncRemainingMs = syncStartTime - now;
+        const syncRemainingSec = Math.ceil(syncRemainingMs / 1000);
+        const msUntilGreen = greenTargetTime - now;
+
+        if (syncRemainingSec > 0) {
+          // Phase 1: Syncing
+          timerTextEl.textContent = `${syncRemainingSec}s to Sync`;
+          timerTextEl.style.color = 'var(--accent-orange)';
+          
+          heroTitle.textContent = "SYNCHRONIZING CLOCKS";
+          heroNumber.textContent = `${syncRemainingSec}s`;
+          heroNumber.className = "countdown-main-number stage-sync";
+          foxMascot.className = "fox-avatar fox-waiting";
+          foxMascot.textContent = MASCOT;
+          
+          animFrameId = requestAnimationFrame(updateDisplay);
+        } else if (msUntilGreen > 0) {
+          // Phase 2: Live Countdown (3, 2, 1)
+          timerTextEl.textContent = "COUNTDOWN ACTIVE";
+          timerTextEl.style.color = 'var(--accent-yellow)';
+          
+          foxMascot.className = "fox-avatar fox-ready";
+
+          if (msUntilGreen > 2000) {
+            heroTitle.textContent = "HANDS ON BUZZERS!";
+            heroNumber.textContent = "3 🔴";
+            heroNumber.className = "countdown-main-number stage-red";
+            foxMascot.textContent = MASCOT;
+          } else if (msUntilGreen > 1000) {
+            heroTitle.textContent = "GET READY...";
+            heroNumber.textContent = "2 🟣";
+            heroNumber.className = "countdown-main-number stage-purple";
+            foxMascot.textContent = "😼";
+          } else {
+            heroTitle.textContent = "SET...";
+            heroNumber.textContent = "1 🟠";
+            heroNumber.className = "countdown-main-number stage-orange";
+            foxMascot.textContent = "💥";
+          }
+          
+          animFrameId = requestAnimationFrame(updateDisplay);
+        } else {
+          // Phase 3: LIVE
+          timerTextEl.textContent = "BUZZERS LIVE!";
+          timerTextEl.style.color = 'var(--accent-green)';
+          
+          heroTitle.textContent = "BUZZ IN NOW!";
+          heroNumber.textContent = "GO! 🟢";
+          heroNumber.className = "countdown-main-number stage-live";
+          foxMascot.className = "fox-avatar fox-live";
+          foxMascot.textContent = MASCOT + "🚀";
+
+          // Auto-hide hero overlay 2 seconds after going live
+          setTimeout(() => {
+            if (now >= greenTargetTime) {
+              heroCard.style.display = 'none';
+            }
+          }, 2000);
+        }
+      }
+      animFrameId = requestAnimationFrame(updateDisplay);
+    }
+
+    function stopTimerUI() {
+      if (animFrameId) { cancelAnimationFrame(animFrameId); animFrameId = null; }
+    }
+
+    function clearTables() {
+      document.getElementById('rankings-table').innerHTML = `<tr><td colspan="5" class="empty-state">Waiting for question to start...</td></tr>`;
+      document.getElementById('fouls-table').innerHTML = `<tr><td colspan="4" class="empty-state">No early buzzes recorded.</td></tr>`;
+    }
+
+    function showPrematureSpotlight(data) {
+      const banner = document.getElementById('premature-spotlight');
+      document.getElementById('premature-name').textContent = `${escapeHTML(data.displayName)}`;
+      document.getElementById('premature-msg').textContent = `"Team: ${escapeHTML(data.teamName)}"`;
+      
+      banner.style.display = 'flex';
+
+      if (prematureTimeout) clearTimeout(prematureTimeout);
+      prematureTimeout = setTimeout(() => { banner.style.display = 'none'; }, 4000);
+    }
+
+    function showWinnerSpotlight(winner) {
+      if (!winner) return;
+      const banner = document.getElementById('winner-spotlight');
+      banner.style.display = 'flex';
+      document.getElementById('winner-name').textContent = escapeHTML(winner.displayName);
+      document.getElementById('winner-team').textContent = `Team: ${escapeHTML(winner.teamName)}`;
+      document.getElementById('winner-time').textContent = `+${(winner.reactionTimeMs / 1000).toFixed(3)}s`;
+    }
+
+    function showFoulSpotlight(foul) {
+      if (!foul) return;
+      const banner = document.getElementById('foul-spotlight');
+      banner.style.display = 'flex';
+      document.getElementById('foul-name').textContent = escapeHTML(foul.displayName);
+      document.getElementById('foul-team').textContent = `Team: ${escapeHTML(foul.teamName)}`;
+      document.getElementById('foul-time').textContent = `${(foul.earlyMs / 1000).toFixed(3)}s`;
+    }
+
+    function renderRankings(rankings) {
+      const table = document.getElementById('rankings-table');
+      if (rankings.length === 0) return;
+
+      table.innerHTML = rankings.map(r => `
+        <tr class="rank-${r.rank}">
+          <td>#${r.rank}</td>
+          <td><strong>${escapeHTML(r.displayName)}</strong></td>
+          <td>${escapeHTML(r.teamName)}</td>
+          <td>+${(r.reactionTimeMs / 1000).toFixed(3)}s</td>
+          <td>${r.behindWinnerMs === 0 ? '—' : '+' + r.behindWinnerMs.toFixed(1) + 'ms'}</td>
+        </tr>
+      `).join('');
+    }
+
+    function renderFouls(fouls) {
+      const table = document.getElementById('fouls-table');
+      if (fouls.length === 0) return;
+
+      table.innerHTML = fouls.map(f => `
+        <tr class="foul-row">
+          <td><strong>${escapeHTML(f.displayName)}</strong></td>
+          <td>${escapeHTML(f.teamName)}</td>
+          <td>-${(f.earlyMs / 1000).toFixed(3)}s</td>
+          <td>🚨 Jumped Light</td>
+        </tr>
+      `).join('');
+    }
+
+    init();
+  </script>
+</body>
+</html>

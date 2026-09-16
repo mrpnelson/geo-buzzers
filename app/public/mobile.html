@@ -1,0 +1,962 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>Mobile Host Console</title>
+  <style>
+    :root {
+      --bg-dark: #121314;
+      --card-bg: #1e2022;
+      --card-border: #3a3d40;
+      --accent-orange: #ff6900;
+      --accent-green: #25ae67;
+      --accent-blue: #3a67ad;
+      --accent-yellow: #facc15;
+      --danger-red: #d9381e;
+      --text-white: #ffffff;
+      --text-muted: #a0a3a6;
+      --input-bg: #191b1d;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
+    body { background: var(--bg-dark); color: var(--text-white); min-height: 100vh; padding: 12px; display: flex; flex-direction: column; gap: 12px; }
+
+    header { display: flex; flex-direction: column; gap: 10px; background: var(--card-bg); padding: 12px 14px; border-radius: 10px; border: 1px solid var(--card-border); }
+    .header-row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+    h1 { font-size: 1.05rem; font-weight: 900; color: var(--accent-orange); text-transform: uppercase; letter-spacing: 0.05em; white-space: nowrap; }
+
+    .badges { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+    .header-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+
+    .back-link {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 32px; height: 32px; flex-shrink: 0;
+      border-radius: 8px; border: 1px solid var(--card-border);
+      background: var(--input-bg); color: var(--text-muted);
+      text-decoration: none; font-size: 1.15rem; font-weight: 800; line-height: 1;
+      transition: all 0.15s ease;
+    }
+    .back-link:hover, .back-link:active { color: var(--accent-orange); border-color: var(--accent-orange); }
+
+    .status-badge { font-size: 0.72rem; padding: 4px 10px; border-radius: 14px; background: var(--card-border); color: var(--text-muted); font-weight: 700; white-space: nowrap; }
+    .status-badge.listening { background: rgba(58, 103, 173, 0.25); color: #93c5fd; border: 1px solid var(--accent-blue); }
+    .status-badge.connected { background: rgba(37, 174, 103, 0.2); color: #72efb0; border: 1px solid var(--accent-green); }
+    .status-badge.disconnected { background: rgba(217, 56, 30, 0.2); color: #ff8e7d; border: 1px solid var(--danger-red); }
+
+    /* BCP Toggle Switch (ported from the web console) */
+    .bcp-toggle-container { display: flex; align-items: center; gap: 8px; background: var(--input-bg); padding: 5px 10px; border-radius: 8px; border: 1px solid var(--card-border); }
+    .bcp-toggle-container label.bcp-label { font-size: 0.72rem; font-weight: 800; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+    .switch { position: relative; display: inline-block; width: 42px; height: 22px; flex-shrink: 0; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: var(--card-border); transition: .2s; }
+    .slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background-color: white; transition: .2s; }
+    input:checked + .slider { background-color: var(--accent-blue); }
+    input:checked + .slider:before { transform: translateX(20px); }
+    .slider.round { border-radius: 22px; }
+    .slider.round:before { border-radius: 50%; }
+    input:disabled + .slider { opacity: 0.5; cursor: not-allowed; }
+
+    .pin-bar { background: var(--input-bg); padding: 4px 8px; border-radius: 6px; display: flex; gap: 6px; align-items: center; border: 1px solid var(--card-border); }
+    .pin-bar input { padding: 5px 6px; font-size: 0.8rem; border-radius: 4px; border: 1px solid var(--card-border); background: var(--bg-dark); color: #fff; width: 76px; text-align: center; }
+    .pin-bar button { padding: 5px 10px; font-size: 0.75rem; background: var(--accent-orange); color: #fff; border: none; border-radius: 4px; cursor: pointer; font-weight: 800; }
+    #pin-status-label { font-size: 0.75rem; color: var(--accent-orange); font-weight: 800; }
+
+    .card { background: var(--card-bg); border-radius: 10px; padding: 14px; border: 1px solid var(--card-border); display: flex; flex-direction: column; gap: 12px; }
+    .card h2 { font-size: 0.95rem; color: var(--accent-orange); text-transform: uppercase; letter-spacing: 0.08em; font-weight: 800; border-bottom: 2px solid var(--card-border); padding-bottom: 6px; }
+
+    /* Mobile Animated Countdown Status Box */
+    .timer-status-box {
+      font-size: 1.1rem;
+      text-align: center;
+      padding: 12px 8px;
+      background: var(--input-bg);
+      border-radius: 8px;
+      color: var(--accent-orange);
+      border: 2px solid var(--card-border);
+      font-weight: 800;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      transition: all 0.2s ease;
+    }
+
+    .timer-status-box.stage-assign { background: rgba(217, 70, 239, 0.25); color: #d946ef; border-color: #d946ef; }
+    .timer-status-box.stage-waiting { background: rgba(250, 204, 21, 0.18); color: #fde047; border-color: var(--accent-yellow); }
+    .timer-status-box.stage-ready { background: rgba(37, 174, 103, 0.25); color: #4ade80; border-color: #4ade80; }
+    .timer-status-box.stage-sync { background: rgba(250, 204, 21, 0.25); color: #fde047; border-color: #fde047; }
+    .timer-status-box.stage-red { background: rgba(217, 56, 30, 0.25); color: #ff4d4d; border-color: #ff4d4d; }
+    .timer-status-box.stage-purple { background: rgba(192, 132, 252, 0.25); color: #c084fc; border-color: #c084fc; }
+    .timer-status-box.stage-orange { background: rgba(251, 146, 60, 0.25); color: #fb923c; border-color: #fb923c; }
+    .timer-status-box.stage-live { background: rgba(37, 174, 103, 0.25); color: #4ade80; border-color: #4ade80; }
+
+    button.btn { width: 100%; padding: 12px; border: none; border-radius: 8px; font-weight: 800; font-size: 0.95rem; cursor: pointer; text-transform: uppercase; transition: all 0.15s ease; }
+    .btn-open { background: var(--card-border); color: var(--text-muted); }
+    .btn-open.active { background: #d946ef; color: #fff; }
+    .btn-reset { background: var(--card-border); color: var(--text-muted); }
+    .btn-reset.active { background: var(--accent-blue); color: #fff; }
+    .btn-test { background: var(--card-border); color: var(--text-muted); }
+    .btn-test.active { background: #ca8a04; color: #ffffff; }
+    .btn-toggle { background: #10b981; color: #ffffff; display: none; }
+    .btn-toggle.active { background: #ef4444; color: #ffffff; }
+    .btn-save { background: var(--accent-orange); color: #fff; }
+    button:disabled { opacity: 0.4; cursor: not-allowed; filter: none; }
+
+    .form-group { display: flex; flex-direction: column; gap: 4px; }
+    .form-group label { font-size: 0.72rem; font-weight: 700; color: var(--text-muted); text-transform: uppercase; }
+    .form-group input, .form-group select { padding: 8px 10px; font-size: 0.85rem; border-radius: 6px; border: 1px solid var(--card-border); background: var(--input-bg); color: #fff; }
+    .form-group input:focus, .form-group select:focus { outline: none; border-color: var(--accent-orange); }
+
+    /* Event spotlights (compact versions of the web console banners) */
+    #event-feed { display: flex; flex-direction: column-reverse; gap: 10px; }
+    .winner-banner, .foul-banner, .premature-banner { border-radius: 10px; padding: 12px 14px; display: flex; justify-content: space-between; align-items: center; gap: 10px; box-shadow: 0 6px 16px rgba(0,0,0,0.4); }
+    .winner-banner { background: linear-gradient(135deg, #1e3a8a, var(--accent-blue)); border: 2px solid #ffffff; }
+    .foul-banner { background: linear-gradient(135deg, #7f1d1d, var(--danger-red)); border: 2px solid #ff8e7d; }
+    .premature-banner { background: linear-gradient(135deg, #713f12, var(--accent-orange)); border: 2px solid var(--accent-yellow); }
+    .spotlight-kicker { font-size: 0.68rem; text-transform: uppercase; font-weight: 800; letter-spacing: 0.05em; }
+    .spotlight-name { font-size: 1.15rem; font-weight: 800; line-height: 1.2; }
+    .spotlight-sub { font-size: 0.78rem; }
+    .spotlight-time { font-family: ui-monospace, monospace; font-size: 1.1rem; font-weight: 900; text-align: right; white-space: nowrap; }
+
+    .buzzers-list { display: flex; flex-direction: column; gap: 10px; }
+    .buzzer-item { background: var(--input-bg); border: 1px solid var(--card-border); border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
+    .buzzer-item-header { display: flex; justify-content: space-between; align-items: center; }
+    .buzzer-title { font-size: 0.78rem; font-weight: 800; color: var(--accent-orange); word-break: break-all; display: flex; align-items: center; gap: 6px; }
+    .press-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background-color: var(--accent-orange); opacity: 0; transition: opacity 0.15s ease; box-shadow: 0 0 8px var(--accent-orange); flex-shrink: 0; }
+    .press-dot.active { opacity: 1; }
+    .buzzer-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+
+    table { width: 100%; border-collapse: collapse; text-align: left; }
+    th { padding: 8px 6px; border-bottom: 2px solid var(--card-border); color: var(--text-muted); font-size: 0.7rem; text-transform: uppercase; white-space: nowrap; }
+    td { padding: 8px 6px; border-bottom: 1px solid var(--card-border); font-size: 0.82rem; }
+    .rank-1 { color: #fff; font-weight: 800; background: rgba(255, 105, 0, 0.25); }
+    .rank-1 td:first-child::before { content: "🔔 "; }
+    .foul-row { color: #ff8e7d; font-weight: bold; }
+    .empty-state { text-align: center; padding: 16px; color: var(--text-muted); font-style: italic; font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="header-row">
+      <div class="header-left">
+        <a href="/" class="back-link" title="Back to Portal" aria-label="Back to Portal">&#8592;</a>
+        <h1 data-brand-heading>Host Mobile</h1>
+      </div>
+      <div class="badges">
+        <div id="listener-status" class="status-badge listening">Listening</div>
+        <div id="connection-status" class="status-badge disconnected">Disconnected</div>
+      </div>
+    </div>
+    <div class="header-row">
+      <!-- BCP Toggle Switch -->
+      <div class="bcp-toggle-container">
+        <label class="bcp-label">BCP</label>
+        <label class="switch">
+          <input type="checkbox" id="bcp-toggle" onchange="toggleBCP()" disabled>
+          <span class="slider round"></span>
+        </label>
+      </div>
+
+      <div class="pin-bar" id="pin-container">
+        <span id="pin-status-label">PIN:</span>
+        <input type="password" id="pin-input" placeholder="PIN">
+        <button id="pin-btn" onclick="authenticatePin()">Unlock</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="card">
+    <h2>Host Controls</h2>
+    <div id="timer-box" class="timer-status-box stage-waiting">
+      <span id="mobile-fox"></span>
+      <span id="mobile-timer-text">Waiting for Buzzers...</span>
+    </div>
+
+    <button id="open-btn" class="btn btn-open" disabled onclick="startTimer()">⚡ Open Buzzers</button>
+    <button id="reset-btn" class="btn btn-reset" disabled onclick="resetRound()">🔄 Reset Buzzers</button>
+    <button id="ledtest-btn" class="btn btn-test" disabled onclick="testLeds()">💡 Test Buzzer LEDs</button>
+    <button id="btn-toggle-virtual" class="btn btn-toggle" disabled onclick="toggleVirtualBuzzers()">📱 <span id="virtual-btn-text">Enable Web Buzzers</span></button>
+    <button id="save-btn" class="btn btn-save" disabled onclick="saveMappings()">💾 Save Names & Teams</button>
+  </div>
+
+  <div id="event-feed">
+    <div id="winner-spotlight" class="winner-banner" style="display: none;">
+      <div>
+        <div class="spotlight-kicker" style="color: #93c5fd;">Active Buzz In</div>
+        <div id="winner-name" class="spotlight-name"></div>
+        <div id="winner-team" class="spotlight-sub" style="color: #dbeafe;"></div>
+      </div>
+      <div>
+        <div class="spotlight-kicker" style="color: #93c5fd;">Reaction</div>
+        <div id="winner-time" class="spotlight-time">+0.000s</div>
+      </div>
+    </div>
+
+    <div id="foul-spotlight" class="foul-banner" style="display: none;">
+      <div>
+        <div class="spotlight-kicker" style="color: #fca5a5;">⚠️ Early Buzz Foul</div>
+        <div id="foul-name" class="spotlight-name"></div>
+        <div id="foul-team" class="spotlight-sub" style="color: #fecaca;"></div>
+      </div>
+      <div>
+        <div class="spotlight-kicker" style="color: #fca5a5;">Early By</div>
+        <div id="foul-time" class="spotlight-time" style="color: #fecaca;">0.000s</div>
+      </div>
+    </div>
+
+    <div id="premature-spotlight" class="premature-banner" style="display: none;">
+      <div>
+        <div class="spotlight-kicker" style="color: #fde047;">⚡ Premature Press</div>
+        <div id="premature-name" class="spotlight-name" style="color: #fff;"></div>
+        <div id="premature-msg" class="spotlight-sub" style="color: #fef08a; font-style: italic;"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Live Buzz Order</h2>
+    <div style="overflow-x: auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Rank</th>
+            <th>Player</th>
+            <th>Team</th>
+            <th>Reaction</th>
+            <th>Behind</th>
+          </tr>
+        </thead>
+        <tbody id="rankings-table">
+          <tr><td colspan="5" class="empty-state">Waiting for question...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Early Buzz Fouls</h2>
+    <div style="overflow-x: auto;">
+      <table>
+        <thead>
+          <tr>
+            <th>Player</th>
+            <th>Team</th>
+            <th>Penalty</th>
+            <th>Status</th>
+          </tr>
+        </thead>
+        <tbody id="fouls-table">
+          <tr><td colspan="4" class="empty-state">No early buzzes.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Team Names</h2>
+    <div class="form-group"><label>Team 1</label><input type="text" id="team-1-name" value="Team 1" onchange="saveMappings()"></div>
+    <div class="form-group"><label>Team 2</label><input type="text" id="team-2-name" value="Team 2" onchange="saveMappings()"></div>
+    <div class="form-group"><label>Team 3</label><input type="text" id="team-3-name" value="Team 3" onchange="saveMappings()"></div>
+    <div class="form-group"><label>Team 4</label><input type="text" id="team-4-name" value="Team 4" onchange="saveMappings()"></div>
+  </div>
+
+  <div class="card">
+    <h2>Connected Buzzers</h2>
+    <div id="buzzers-container" class="buzzers-list">
+      <div class="empty-state" id="no-buzzers-msg">Waiting for buzzers to connect...</div>
+    </div>
+  </div>
+
+  <script>
+    // ------------------------------------------------------------------
+    // BRANDING
+    // window.APP_CONFIG is injected by the server from config.json. The
+    // fallbacks below keep the page working if it is opened directly from
+    // disk or served by something that doesn't inject it.
+    // ------------------------------------------------------------------
+    const BRAND_FALLBACK = { mascot: '🔔', accentColor: '#ff6900', storagePrefix: 'buzzer' };
+    const PAGE_FALLBACK = { title: 'Mobile Host Console', heading: 'Host Mobile' };
+
+    const CONFIG = {
+      brand: Object.assign({}, BRAND_FALLBACK, (window.APP_CONFIG || {}).brand),
+      page: Object.assign({}, PAGE_FALLBACK, (window.APP_CONFIG || {}).page)
+    };
+    const MASCOT = CONFIG.brand.mascot;
+    const STORAGE_PREFIX = CONFIG.brand.storagePrefix;
+
+    function applyBranding() {
+      document.title = CONFIG.page.title;
+      document.documentElement.style.setProperty('--accent-orange', CONFIG.brand.accentColor);
+      const headingEl = document.querySelector('[data-brand-heading]');
+      if (headingEl) headingEl.textContent = CONFIG.page.heading;
+    }
+    applyBranding();
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const SERVER_URL = `${protocol}//${window.location.host}`;
+
+    // Console clock sync. The console does not register as a buzzer, so the
+    // SYNC_REQUEST is sent WITHOUT a playerId - the server answers with
+    // timestamps but does not add a phantom device to the roster.
+    const SYNC_BURST_SAMPLES = 5;
+    const SYNC_BURST_SPACING_MS = 90;
+    const RESYNC_INTERVAL_MS = 60000;
+    const SYNC_EMA_ALPHA = 0.25;
+    const MAX_PLAUSIBLE_RTT_MS = 2000;
+
+    let socket;
+    let animFrameId = null;
+    let syncStartTime = null;
+    let greenTargetTime = null;
+    let foulsList = [];
+    let prematureTimeout = null;
+    let buzzersLive = false;
+    let flashTimeouts = {};
+    let activePin = null;
+    let adminUnlocked = false;
+    let connectedDevicesList = [];
+    let virtualBuzzersEnabled = false;
+    let bcpEnabled = false;
+    let currentTeams = { 1: 'Team 1', 2: 'Team 2', 3: 'Team 3', 4: 'Team 4' };
+
+    let clockOffsetMs = 0;
+    let isCalibrated = false;
+    let burstSamples = [];
+    let pendingSamples = new Map();
+    let sampleCounter = 0;
+    let resyncTimer = null;
+    let burstTimer = null;
+
+    function serverNow() {
+      return Date.now() + clockOffsetMs;
+    }
+
+    async function init() {
+      connect();
+      try {
+        const res = await fetch('/api/auth-status');
+        const data = await res.json();
+        if (!data.pinRequired) {
+          document.getElementById('pin-container').style.display = 'none';
+          adminUnlocked = true;
+          document.getElementById('bcp-toggle').disabled = false;
+          checkAllBuzzersAssigned();
+        }
+      } catch (err) {
+        console.error("Failed to check auth status:", err);
+      }
+    }
+
+    function escapeHTML(str) {
+      if (!str) return '';
+      return String(str).replace(/[&<>'"]/g, tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag));
+    }
+
+    // ==================================================================
+    // CLOCK SYNC (display only - keeps the countdown honest on a phone
+    // whose system clock drifts away from the server)
+    // ==================================================================
+    function sendSyncSample(isPeriodic) {
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      sampleCounter++;
+      const t0 = Date.now();
+      pendingSamples.set(sampleCounter, t0);
+      socket.send(JSON.stringify({
+        type: 'SYNC_REQUEST',
+        t0: t0,
+        sampleIndex: sampleCounter,
+        isPeriodic: !!isPeriodic
+      }));
+    }
+
+    function startSyncBurst() {
+      if (burstTimer) { clearTimeout(burstTimer); burstTimer = null; }
+      burstSamples = [];
+      let sent = 0;
+      const fire = () => {
+        burstTimer = null;
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        sendSyncSample(false);
+        sent++;
+        if (sent < SYNC_BURST_SAMPLES) burstTimer = setTimeout(fire, SYNC_BURST_SPACING_MS);
+      };
+      fire();
+    }
+
+    function scheduleResync() {
+      if (resyncTimer) clearInterval(resyncTimer);
+      resyncTimer = setInterval(() => {
+        if (animFrameId) return; // never re-sync mid-countdown
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        sendSyncSample(true);
+      }, RESYNC_INTERVAL_MS);
+    }
+
+    function handleSyncResponse(data) {
+      const t3 = Date.now();
+      const t0 = pendingSamples.has(data.sampleIndex) ? pendingSamples.get(data.sampleIndex) : data.t0;
+      pendingSamples.delete(data.sampleIndex);
+      if (typeof t0 !== 'number' || typeof data.t1 !== 'number' || typeof data.t2 !== 'number') return;
+
+      const rtt = (t3 - t0) - (data.t2 - data.t1);
+      const offset = ((data.t1 - t0) + (data.t2 - t3)) / 2;
+      if (rtt < 0 || rtt > MAX_PLAUSIBLE_RTT_MS) return;
+
+      if (data.isPeriodic && isCalibrated) {
+        clockOffsetMs = Math.round((SYNC_EMA_ALPHA * offset) + ((1 - SYNC_EMA_ALPHA) * clockOffsetMs));
+      } else {
+        burstSamples.push({ rtt, offset });
+        let best = burstSamples[0];
+        for (const s of burstSamples) if (s.rtt < best.rtt) best = s;
+        if (!isCalibrated || burstSamples.length >= SYNC_BURST_SAMPLES) {
+          clockOffsetMs = Math.round(best.offset);
+        }
+        if (burstSamples.length >= SYNC_BURST_SAMPLES) isCalibrated = true;
+      }
+    }
+
+    // ==================================================================
+    // CONNECTION
+    // ==================================================================
+    function connect() {
+      socket = new WebSocket(SERVER_URL);
+      socket.onopen = () => {
+        const badge = document.getElementById('connection-status');
+        badge.textContent = 'Online';
+        badge.className = 'status-badge connected';
+
+        isCalibrated = false;
+        burstSamples = [];
+        pendingSamples.clear();
+        startSyncBurst();
+        scheduleResync();
+      };
+      socket.onclose = () => {
+        const badge = document.getElementById('connection-status');
+        badge.textContent = 'Offline';
+        badge.className = 'status-badge disconnected';
+        if (resyncTimer) { clearInterval(resyncTimer); resyncTimer = null; }
+        if (burstTimer) { clearTimeout(burstTimer); burstTimer = null; }
+        setTimeout(connect, 2000);
+      };
+      socket.onmessage = (event) => {
+        try {
+          handleServerMessage(JSON.parse(event.data));
+        } catch (e) {
+          console.error("Message parse error", e);
+        }
+      };
+    }
+
+    async function authenticatePin() {
+      const pin = document.getElementById('pin-input').value;
+      try {
+        const res = await fetch('/api/verify-pin', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pin })
+        });
+        if (res.ok) {
+          activePin = pin;
+          adminUnlocked = true;
+          document.getElementById('pin-status-label').textContent = "Unlocked";
+          document.getElementById('pin-input').style.display = "none";
+          document.getElementById('pin-btn').style.display = "none";
+
+          document.getElementById('bcp-toggle').disabled = false;
+          checkAllBuzzersAssigned();
+        } else {
+          alert("Incorrect PIN");
+        }
+      } catch (err) {
+        alert("Error verifying PIN with server");
+      }
+    }
+
+    // ==================================================================
+    // HOST ACTIONS
+    // ==================================================================
+    function toggleBCP() {
+      const isEnabled = document.getElementById('bcp-toggle').checked;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'TOGGLE_BCP', pin: activePin, bcpEnabled: isEnabled }));
+      }
+    }
+
+    function toggleVirtualBuzzers() {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'TOGGLE_VIRTUAL', pin: activePin }));
+      }
+    }
+
+    function startTimer() {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'START_TIMER', pin: activePin }));
+      }
+    }
+
+    function resetRound() {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'RESET_ROUND', pin: activePin }));
+      }
+    }
+
+    function testLeds() {
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'LED_TEST', pin: activePin }));
+      }
+    }
+
+    function saveMappings() {
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+
+      const mappings = {};
+      document.querySelectorAll('.buzzer-item').forEach(item => {
+        const hwId = item.dataset.hwid;
+        const nameInput = item.querySelector('.buzzer-name-input').value;
+        const teamSelect = item.querySelector('.buzzer-team-select').value;
+        mappings[hwId] = { displayName: nameInput || hwId, teamId: teamSelect };
+      });
+
+      const teams = {
+        1: document.getElementById('team-1-name').value || 'Team 1',
+        2: document.getElementById('team-2-name').value || 'Team 2',
+        3: document.getElementById('team-3-name').value || 'Team 3',
+        4: document.getElementById('team-4-name').value || 'Team 4'
+      };
+
+      socket.send(JSON.stringify({ type: 'UPDATE_MAPPINGS', pin: activePin, mappings, teams }));
+      checkAllBuzzersAssigned();
+    }
+
+    // ==================================================================
+    // SERVER MESSAGES
+    // ==================================================================
+    function handleServerMessage(data) {
+      switch (data.type) {
+        case 'SYNC_RESPONSE':
+          handleSyncResponse(data);
+          break;
+        case 'AUTH_ERROR':
+          alert(data.message);
+          break;
+        case 'DEVICE_LIST_UPDATE':
+          connectedDevicesList = data.devices || [];
+          if (data.teams) {
+            for (const [id, t] of Object.entries(data.teams)) {
+              currentTeams[id] = t.teamName || `Team ${id}`;
+              const inputEl = document.getElementById(`team-${id}-name`);
+              if (inputEl && document.activeElement !== inputEl) {
+                inputEl.value = currentTeams[id];
+              }
+            }
+          }
+
+          if (data.bcpEnabled !== undefined) {
+            bcpEnabled = data.bcpEnabled;
+            const bcpToggle = document.getElementById('bcp-toggle');
+            if (document.activeElement !== bcpToggle) bcpToggle.checked = data.bcpEnabled;
+            document.getElementById('btn-toggle-virtual').style.display = data.bcpEnabled ? 'block' : 'none';
+          }
+
+          if (data.virtualEnabled !== undefined) {
+            virtualBuzzersEnabled = data.virtualEnabled;
+            const vBtnText = document.getElementById('virtual-btn-text');
+            const vBtn = document.getElementById('btn-toggle-virtual');
+            if (vBtnText && vBtn) {
+              if (data.virtualEnabled) {
+                vBtnText.textContent = 'Disable Web Buzzers';
+                vBtn.classList.add('active');
+              } else {
+                vBtnText.textContent = 'Enable Web Buzzers';
+                vBtn.classList.remove('active');
+              }
+            }
+          }
+
+          renderBuzzersList();
+          break;
+        case 'BUTTON_PRESS_FLASH':
+          triggerPressFlash(data.hardwareId);
+          break;
+        case 'SCHEDULED_TIMER_START':
+          syncStartTime = data.syncStartTime;
+          greenTargetTime = data.greenTargetTime;
+          buzzersLive = false;
+          startCountdownUI();
+          clearTables();
+          hideSpotlights();
+          break;
+        case 'ROUND_RESET':
+          stopTimerUI();
+          buzzersLive = false;
+          resetHostTimerBox();
+          hideSpotlights();
+          checkAllBuzzersAssigned();
+          clearTables();
+          foulsList = [];
+          break;
+        case 'PREMATURE_PRESS':
+          showPrematureSpotlight(data);
+          break;
+        case 'FOUL_EVENT':
+          foulsList.push(data.foul);
+          renderFouls(foulsList);
+          showFoulSpotlight(data.foul);
+          break;
+        case 'RANKINGS_UPDATE':
+          renderRankings(data.rankings);
+          showWinnerSpotlight(data.rankings[0]);
+          break;
+      }
+    }
+
+    function hideSpotlights() {
+      document.getElementById('winner-spotlight').style.display = 'none';
+      document.getElementById('foul-spotlight').style.display = 'none';
+      document.getElementById('premature-spotlight').style.display = 'none';
+    }
+
+    // Single place that decides what the idle timer box says. Kept separate
+    // from the button gating so it still runs while the console is locked -
+    // otherwise a PIN-protected console sits on its initial markup forever
+    // and claims it is ready to sync when nothing has connected.
+    function updateTimerBoxIdleState() {
+      if (buzzersLive || animFrameId) return;
+
+      const box = document.getElementById('timer-box');
+      const fox = document.getElementById('mobile-fox');
+      const text = document.getElementById('mobile-timer-text');
+
+      const selects = document.querySelectorAll('.buzzer-team-select');
+      let hasUnassigned = false;
+      let assignedCount = 0;
+      selects.forEach(select => {
+        if (select.value === 'unassigned') hasUnassigned = true;
+        else if (select.value !== 'ignore') assignedCount++;
+      });
+
+      fox.textContent = MASCOT;
+
+      if (hasUnassigned) {
+        box.className = 'timer-status-box stage-assign';
+        text.textContent = 'Please Assign Buzzers';
+      } else if (assignedCount === 0) {
+        // Nothing connected, or everything connected is disabled: either way
+        // a round cannot open, so don't advertise readiness.
+        box.className = 'timer-status-box stage-waiting';
+        text.textContent = 'Waiting for Buzzers...';
+      } else {
+        box.className = 'timer-status-box stage-ready';
+        text.textContent = 'Ready to Sync Buzzers';
+      }
+    }
+
+    function resetHostTimerBox() {
+      updateTimerBoxIdleState();
+    }
+
+    function triggerPressFlash(hwId) {
+      const dot = document.getElementById(`dot-${hwId}`);
+      if (!dot) return;
+      dot.classList.add('active');
+      if (flashTimeouts[hwId]) clearTimeout(flashTimeouts[hwId]);
+      flashTimeouts[hwId] = setTimeout(() => { dot.classList.remove('active'); }, 1000);
+    }
+
+    // ==================================================================
+    // BUZZER ROSTER
+    // ==================================================================
+    function findBuzzerCard(container, hwId) {
+      // Matching on the decoded dataset value avoids brittle attribute
+      // selectors when a hardware id contains awkward characters.
+      return Array.from(container.querySelectorAll('.buzzer-item'))
+        .find(el => el.dataset.hwid === hwId) || null;
+    }
+
+    function renderBuzzersList() {
+      const container = document.getElementById('buzzers-container');
+      const listenerBadge = document.getElementById('listener-status');
+
+      const count = connectedDevicesList.length;
+      if (count === 0) {
+        listenerBadge.textContent = "Listening";
+        container.innerHTML = `<div class="empty-state" id="no-buzzers-msg">Waiting for buzzers to connect...</div>`;
+        checkAllBuzzersAssigned();
+        return;
+      }
+
+      listenerBadge.textContent = `${count} Buzzer${count > 1 ? 's' : ''} Active`;
+
+      const emptyStateEl = document.getElementById('no-buzzers-msg');
+      if (emptyStateEl) emptyStateEl.remove();
+
+      const currentHwIds = connectedDevicesList.map(d => d.hardwareId || d.playerId);
+      container.querySelectorAll('.buzzer-item').forEach(row => {
+        if (!currentHwIds.includes(row.dataset.hwid)) row.remove();
+      });
+
+      connectedDevicesList.forEach(dev => {
+        const hwId = dev.hardwareId || dev.playerId;
+        const name = dev.displayName || hwId;
+        const currentTeam = dev.teamId || 'unassigned';
+
+        const isWebBuzzer = hwId.startsWith('Virtual_') || hwId.startsWith('Mobile_');
+        const titleLabel = isWebBuzzer ? `${escapeHTML(hwId)} [Web Buzzer]` : escapeHTML(hwId);
+
+        let teamOptionsHtml = '';
+        if (isWebBuzzer && !virtualBuzzersEnabled) {
+          // Collapse to the relabeled Disabled state, preserving "ignore".
+          teamOptionsHtml = `<option value="ignore" selected>Disabled [Web Buzzers Disabled]</option>`;
+        } else {
+          teamOptionsHtml = `
+            <option value="unassigned" ${currentTeam === 'unassigned' ? 'selected' : ''}>Assign...</option>
+            <option value="1" ${currentTeam === '1' ? 'selected' : ''}>${escapeHTML(currentTeams[1])}</option>
+            <option value="2" ${currentTeam === '2' ? 'selected' : ''}>${escapeHTML(currentTeams[2])}</option>
+            <option value="3" ${currentTeam === '3' ? 'selected' : ''}>${escapeHTML(currentTeams[3])}</option>
+            <option value="4" ${currentTeam === '4' ? 'selected' : ''}>${escapeHTML(currentTeams[4])}</option>
+            <option value="ignore" ${currentTeam === 'ignore' ? 'selected' : ''}>Disabled</option>
+          `;
+        }
+
+        const existingCard = findBuzzerCard(container, hwId);
+        if (!existingCard) {
+          const card = document.createElement('div');
+          card.className = 'buzzer-item';
+          card.dataset.hwid = hwId;
+          card.innerHTML = `
+            <div class="buzzer-item-header">
+              <span class="buzzer-title">
+                ${titleLabel}
+                <span id="dot-${escapeHTML(hwId)}" class="press-dot"></span>
+              </span>
+            </div>
+            <div class="buzzer-inputs">
+              <div class="form-group">
+                <label>Name</label>
+                <input type="text" class="buzzer-name-input" value="${escapeHTML(name)}" placeholder="Display Name">
+              </div>
+              <div class="form-group">
+                <label>Team</label>
+                <select class="buzzer-team-select" onchange="saveMappings()">
+                  ${teamOptionsHtml}
+                </select>
+              </div>
+            </div>
+          `;
+          container.appendChild(card);
+        } else {
+          const titleEl = existingCard.querySelector('.buzzer-title');
+          const wasActive = document.getElementById(`dot-${hwId}`)?.classList.contains('active');
+          titleEl.innerHTML = `${titleLabel} <span id="dot-${escapeHTML(hwId)}" class="press-dot ${wasActive ? 'active' : ''}"></span>`;
+
+          const nameInput = existingCard.querySelector('.buzzer-name-input');
+          const selectEl = existingCard.querySelector('.buzzer-team-select');
+          if (document.activeElement !== nameInput) nameInput.value = name;
+
+          if (selectEl.innerHTML.trim() !== teamOptionsHtml.trim()) {
+            selectEl.innerHTML = teamOptionsHtml;
+          } else if (document.activeElement !== selectEl) {
+            selectEl.value = currentTeam;
+          }
+        }
+      });
+
+      checkAllBuzzersAssigned();
+    }
+
+    // Single source of truth for every control's enabled state, matching
+    // the web console: nothing is live until the PIN is accepted, and the
+    // round cannot open while any buzzer is still unassigned.
+    function checkAllBuzzersAssigned() {
+      const selects = document.querySelectorAll('.buzzer-team-select');
+      let hasUnassigned = false;
+      let assignedCount = 0;
+
+      selects.forEach(select => {
+        if (select.value === 'unassigned') {
+          hasUnassigned = true;
+        } else if (select.value !== 'ignore') {
+          assignedCount++;
+        }
+      });
+
+      const openBtn = document.getElementById('open-btn');
+      const resetBtn = document.getElementById('reset-btn');
+      const testBtn = document.getElementById('ledtest-btn');
+      const virtualToggleBtn = document.getElementById('btn-toggle-virtual');
+      const saveBtn = document.getElementById('save-btn');
+
+      // Status text reflects the room, not the operator's permissions.
+      updateTimerBoxIdleState();
+
+      if (!adminUnlocked) {
+        openBtn.disabled = true;
+        resetBtn.disabled = true;
+        testBtn.disabled = true;
+        virtualToggleBtn.disabled = true;
+        saveBtn.disabled = true;
+        return;
+      }
+
+      testBtn.disabled = false;
+      testBtn.classList.add('active');
+      virtualToggleBtn.disabled = false;
+      saveBtn.disabled = false;
+
+      // A round is underway from the instant the sequence starts (countdown
+      // animating) through to the green light, so Open must stay inert for
+      // all of it - not just once buzzers go live.
+      const roundInProgress = buzzersLive || !!animFrameId;
+
+      if (assignedCount > 0 && !hasUnassigned && !roundInProgress) {
+        openBtn.disabled = false;
+        openBtn.classList.add('active');
+      } else {
+        openBtn.disabled = true;
+        openBtn.classList.remove('active');
+      }
+
+      // Reset is gated on there being something to reset, not on roster
+      // size. If every buzzer drops out mid-round the roster goes empty,
+      // and keying off that alone left the host stranded in a live round
+      // with no way to clear it until a buzzer reconnected.
+      if (roundInProgress || selects.length > 0) {
+        resetBtn.disabled = false;
+        resetBtn.classList.add('active');
+      } else {
+        resetBtn.disabled = true;
+        resetBtn.classList.remove('active');
+      }
+    }
+
+    // ==================================================================
+    // COUNTDOWN
+    // ==================================================================
+    function startCountdownUI() {
+      stopTimerUI();
+
+      // The round is committed the moment the sequence begins, so fade Open
+      // back to its inactive state right away instead of leaving it lit
+      // purple through the countdown.
+      const openBtnEl = document.getElementById('open-btn');
+      openBtnEl.disabled = true;
+      openBtnEl.classList.remove('active');
+
+      const timerBox = document.getElementById('timer-box');
+      const foxMascot = document.getElementById('mobile-fox');
+      const timerText = document.getElementById('mobile-timer-text');
+
+      function updateDisplay() {
+        const now = serverNow();
+        const syncRemainingSec = Math.ceil((syncStartTime - now) / 1000);
+        const msUntilGreen = greenTargetTime - now;
+
+        if (syncRemainingSec > 0) {
+          timerBox.className = 'timer-status-box stage-sync';
+          foxMascot.textContent = MASCOT;
+          timerText.textContent = `${syncRemainingSec}s Syncing Clocks`;
+          animFrameId = requestAnimationFrame(updateDisplay);
+        } else if (msUntilGreen > 0) {
+          if (msUntilGreen > 2000) {
+            timerBox.className = 'timer-status-box stage-red';
+            foxMascot.textContent = MASCOT;
+            timerText.textContent = '3 🔴 Ready...';
+          } else if (msUntilGreen > 1000) {
+            timerBox.className = 'timer-status-box stage-purple';
+            foxMascot.textContent = '😼';
+            timerText.textContent = '2 🟣 Set...';
+          } else {
+            timerBox.className = 'timer-status-box stage-orange';
+            foxMascot.textContent = '💥';
+            timerText.textContent = '1 🟠 Get Ready!';
+          }
+          animFrameId = requestAnimationFrame(updateDisplay);
+        } else {
+          timerBox.className = 'timer-status-box stage-live';
+          foxMascot.textContent = '🚀';
+          timerText.textContent = 'GO! 🟢 Buzzers Live!';
+          buzzersLive = true;
+          stopTimerUI();
+          document.getElementById('open-btn').disabled = true;
+          document.getElementById('open-btn').classList.remove('active');
+        }
+      }
+      animFrameId = requestAnimationFrame(updateDisplay);
+    }
+
+    function stopTimerUI() {
+      if (animFrameId) { cancelAnimationFrame(animFrameId); animFrameId = null; }
+    }
+
+    // ==================================================================
+    // TABLES & SPOTLIGHTS
+    // ==================================================================
+    function clearTables() {
+      document.getElementById('rankings-table').innerHTML = `<tr><td colspan="5" class="empty-state">Waiting for question...</td></tr>`;
+      document.getElementById('fouls-table').innerHTML = `<tr><td colspan="4" class="empty-state">No early buzzes.</td></tr>`;
+    }
+
+    function showPrematureSpotlight(data) {
+      const banner = document.getElementById('premature-spotlight');
+      document.getElementById('premature-name').textContent = data.displayName || '';
+      document.getElementById('premature-msg').textContent = `Team: ${data.teamName || '—'}`;
+      banner.style.display = 'flex';
+      banner.style.order = Date.now();
+      if (prematureTimeout) clearTimeout(prematureTimeout);
+      prematureTimeout = setTimeout(() => { banner.style.display = 'none'; }, 3500);
+    }
+
+    function showWinnerSpotlight(winner) {
+      if (!winner) return;
+      const banner = document.getElementById('winner-spotlight');
+      banner.style.display = 'flex';
+      banner.style.order = Date.now();
+      document.getElementById('winner-name').textContent = winner.displayName || '';
+      document.getElementById('winner-team').textContent = `Team: ${winner.teamName || '—'}`;
+      document.getElementById('winner-time').textContent = `+${(winner.reactionTimeMs / 1000).toFixed(3)}s`;
+    }
+
+    function showFoulSpotlight(foul) {
+      if (!foul) return;
+      const banner = document.getElementById('foul-spotlight');
+      banner.style.display = 'flex';
+      banner.style.order = Date.now();
+      document.getElementById('foul-name').textContent = foul.displayName || '';
+      document.getElementById('foul-team').textContent = `Team: ${foul.teamName || '—'}`;
+      document.getElementById('foul-time').textContent = `${(foul.earlyMs / 1000).toFixed(3)}s`;
+    }
+
+    function renderRankings(rankings) {
+      const table = document.getElementById('rankings-table');
+      if (!rankings || rankings.length === 0) return;
+      table.innerHTML = rankings.map(r => `
+        <tr class="rank-${r.rank}">
+          <td>#${r.rank}</td>
+          <td><strong>${escapeHTML(r.displayName)}</strong></td>
+          <td>${escapeHTML(r.teamName)}</td>
+          <td>+${(r.reactionTimeMs / 1000).toFixed(3)}s</td>
+          <td>${r.behindWinnerMs === 0 ? '—' : '+' + r.behindWinnerMs.toFixed(1) + 'ms'}</td>
+        </tr>
+      `).join('');
+    }
+
+    function renderFouls(fouls) {
+      const table = document.getElementById('fouls-table');
+      if (!fouls || fouls.length === 0) return;
+      table.innerHTML = fouls.map(f => `
+        <tr class="foul-row">
+          <td><strong>${escapeHTML(f.displayName)}</strong></td>
+          <td>${escapeHTML(f.teamName)}</td>
+          <td>-${(f.earlyMs / 1000).toFixed(3)}s</td>
+          <td>🚨 Jumped Light</td>
+        </tr>
+      `).join('');
+    }
+
+    init();
+  </script>
+</body>
+</html>
