@@ -6,8 +6,7 @@
   <title>TV Display</title>
   <style>
     :root {
-      --bg-dark: #1e2022;
-      --card-bg: #2d3033;
+      --bg-dark: #121416;
       --card-border: #4a4d52;
       --accent-orange: #ff6900;
       --accent-green: #25ae67;
@@ -15,335 +14,280 @@
       --accent-yellow: #facc15;
       --danger-red: #d9381e;
       --text-white: #ffffff;
-      --text-muted: #a0a3a6;
+      --text-muted: #9ea2a8;
+
+      /* Type scale in vh so it tracks the panel, not the pixel count.
+         8.3vh is the 1:150 legibility threshold at 15 ft on a 42in
+         screen; nothing carrying live information sits below ~6vh. */
+      --fs-chrome: 2.4vh;
+      --fs-chrome-lg: 3.4vh;
+      --fs-roster: 2.3vh;
+      --row-fs: 7vh;
     }
 
-    * { 
-      box-sizing: border-box; 
-      margin: 0; 
-      padding: 0; 
-      font-family: system-ui, -apple-system, sans-serif; 
-    }
-    
-    body { 
-      background: var(--bg-dark); 
-      color: var(--text-white); 
-      width: 100vw;
-      height: 100vh;
-      margin: 0;
-      padding: 16px 20px;
-      overflow: hidden; 
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
 
-    /* Top Header Bar */
-    header { 
-      display: flex; 
-      justify-content: space-between; 
-      align-items: center; 
-      padding: 10px 20px; 
-      background: var(--card-bg);
-      border-radius: 10px;
-      border: 1px solid var(--card-border); 
-      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-      flex-shrink: 0;
+    body {
+      background: var(--bg-dark);
+      color: var(--text-white);
+      width: 100vw; height: 100vh;
+      overflow: hidden;
+      display: flex; flex-direction: column;
+      padding: 1.4vh 1.6vw;
+      gap: 1.2vh;
+      transition: background 0.25s ease;
     }
+    body.is-live { background: #06220f; }
 
-    h1 { 
-      font-size: 1.8rem; 
-      font-weight: 900; 
-      color: var(--accent-orange); 
-      text-transform: uppercase; 
-      letter-spacing: 0.05em; 
+    /* ---------- Top chrome: small on purpose, it is reference only ---------- */
+    header {
+      display: flex; justify-content: space-between; align-items: center;
+      gap: 2vw; flex-shrink: 0;
+      padding: 0.8vh 1.4vw;
+      background: rgba(45,48,51,0.5);
+      border: 1px solid var(--card-border);
+      border-radius: 1vh;
     }
+    .header-left { display: flex; align-items: center; gap: 1.2vw; min-width: 0; }
+    h1 {
+      font-size: var(--fs-chrome-lg); font-weight: 900; color: var(--accent-orange);
+      text-transform: uppercase; letter-spacing: 0.04em; white-space: nowrap;
+    }
+    .header-right { display: flex; align-items: center; gap: 1.2vw; }
 
-    .header-right { display: flex; align-items: center; gap: 16px; }
-    .header-left { display: flex; align-items: center; gap: 14px; min-width: 0; }
-
-    /* Kept deliberately dim so it does not draw the eye on a venue screen. */
     .back-link {
       display: inline-flex; align-items: center; justify-content: center;
-      width: 34px; height: 34px; flex-shrink: 0;
-      border-radius: 8px; border: 1px solid var(--card-border);
+      width: 4vh; height: 4vh; flex-shrink: 0;
+      border-radius: 0.8vh; border: 1px solid var(--card-border);
       background: #121314; color: var(--text-muted);
-      text-decoration: none; font-size: 1.2rem; font-weight: 800; line-height: 1;
-      opacity: 0.35; transition: all 0.15s ease;
+      text-decoration: none; font-size: 2.4vh; font-weight: 800; line-height: 1;
+      opacity: 0.3; transition: all 0.15s ease;
     }
     .back-link:hover { opacity: 1; color: var(--accent-orange); border-color: var(--accent-orange); }
-    
+
     .timer-display {
-      font-size: 1.5rem;
-      text-align: center;
-      padding: 6px 20px;
-      background: #121314;
-      border-radius: 8px;
-      color: var(--accent-orange);
-      border: 2px solid var(--card-border);
-      font-weight: 800;
-      min-width: 260px;
+      font-size: var(--fs-chrome-lg); font-weight: 800; text-align: center;
+      padding: 0.6vh 1.4vw; min-width: 22vw;
+      background: #121314; border: 0.3vh solid var(--card-border);
+      border-radius: 1vh; color: var(--accent-orange);
+      text-transform: uppercase; letter-spacing: 0.02em;
     }
+    .status-badge {
+      font-size: var(--fs-chrome); font-weight: 700; white-space: nowrap;
+      padding: 0.6vh 1.2vw; border-radius: 3vh;
+      background: var(--card-border); color: var(--text-muted);
+    }
+    .status-badge.connected { background: rgba(37,174,103,0.25); color: #72efb0; border: 1px solid var(--accent-green); }
+    .status-badge.disconnected { background: rgba(217,56,30,0.25); color: #ff8e7d; border: 1px solid var(--danger-red); }
 
-    .status-badge { font-size: 0.95rem; padding: 6px 16px; border-radius: 20px; background: var(--card-border); color: var(--text-muted); font-weight: 700; }
-    .status-badge.connected { background: rgba(37, 174, 103, 0.25); color: #72efb0; border: 1px solid var(--accent-green); }
-    .status-badge.disconnected { background: rgba(217, 56, 30, 0.25); color: #ff8e7d; border: 1px solid var(--danger-red); }
-
-    /* Active Buzzer Roster Strip */
+    /* ---------- Roster strip: collapses once results arrive ---------- */
     .roster-strip {
-      background: var(--card-bg);
-      border-radius: 10px;
+      display: flex; align-items: center; gap: 1.2vw; flex-shrink: 0;
+      padding: 0.7vh 1.4vw;
+      background: rgba(45,48,51,0.4);
       border: 1px solid var(--card-border);
-      padding: 8px 16px;
-      display: flex;
-      align-items: center;
-      gap: 16px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.25);
-      flex-shrink: 0;
+      border-radius: 1vh;
+      max-height: 8vh; overflow: hidden;
+      transition: max-height 0.3s ease, opacity 0.3s ease, padding 0.3s ease;
     }
-
+    body.hide-roster .roster-strip {
+      max-height: 0; opacity: 0; padding-top: 0; padding-bottom: 0; border-width: 0;
+    }
     .roster-title {
-      font-size: 0.85rem;
-      font-weight: 900;
-      color: var(--accent-orange);
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      white-space: nowrap;
-      border-right: 2px solid var(--card-border);
-      padding-right: 14px;
+      font-size: var(--fs-chrome); font-weight: 900; color: var(--accent-orange);
+      text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap;
+      border-right: 0.3vh solid var(--card-border); padding-right: 1vw;
     }
-
-    .roster-grid {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 10px;
-      flex-grow: 1;
-      align-items: center;
-      overflow-x: auto;
-    }
-
+    .roster-grid { display: flex; flex-wrap: nowrap; gap: 0.8vw; overflow: hidden; align-items: center; }
     .buzzer-badge {
-      background: #191b1d;
-      border: 1px solid var(--card-border);
-      border-radius: 6px;
-      padding: 4px 12px;
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      font-size: 0.95rem;
-      transition: all 0.2s ease;
+      display: flex; align-items: center; gap: 0.6vw; white-space: nowrap;
+      background: #191b1d; border: 1px solid var(--card-border);
+      border-radius: 0.7vh; padding: 0.4vh 0.9vw; font-size: var(--fs-roster);
     }
-
     .buzzer-badge .dot {
-      width: 9px;
-      height: 9px;
-      border-radius: 50%;
-      background: var(--accent-green);
-      box-shadow: 0 0 6px var(--accent-green);
+      width: 1.3vh; height: 1.3vh; border-radius: 50%;
+      background: var(--accent-green); box-shadow: 0 0 1vh var(--accent-green); flex-shrink: 0;
     }
-
-    .buzzer-badge .player-name { font-weight: 800; color: var(--text-white); }
+    .buzzer-badge .player-name { font-weight: 800; }
     .buzzer-badge .team-tag {
-      font-size: 0.75rem;
-      font-weight: 700;
-      color: var(--accent-orange);
-      background: rgba(255, 105, 0, 0.15);
-      padding: 2px 6px;
-      border-radius: 4px;
+      font-size: 0.8em; font-weight: 700; color: var(--accent-orange);
+      background: rgba(255,105,0,0.15); padding: 0.2vh 0.5vw; border-radius: 0.5vh;
       text-transform: uppercase;
     }
+    .roster-empty { color: var(--text-muted); font-style: italic; font-size: var(--fs-roster); }
 
-    .roster-empty { color: var(--text-muted); font-style: italic; font-size: 0.9rem; }
+    /* ---------- Stage: everything that must read at distance ---------- */
+    .stage { position: relative; flex: 1 1 auto; min-height: 0; display: flex; }
 
-    /* ==========================================================================
-       ANIMATED FOX COUNTDOWN HERO BANNER (TOP-CENTER OVERLAY)
-       ========================================================================== */
-    .hero-countdown-overlay {
-      display: none;
-      flex-direction: column;
+    #results-area {
+      flex: 1 1 auto; min-height: 0;
+      display: grid;
+      grid-template-columns: repeat(var(--cols, 1), 1fr);
+      grid-auto-rows: 1fr;
+      gap: 1vh 1.2vw;
+      align-content: stretch;
+    }
+
+    .result-row {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
       align-items: center;
-      justify-content: center;
-      background: linear-gradient(135deg, #17191b, #2b2e33);
-      border: 3px solid var(--accent-orange);
-      border-radius: 16px;
-      padding: 16px 30px;
-      box-shadow: 0 10px 30px rgba(0,0,0,0.6), 0 0 20px rgba(255, 105, 0, 0.3);
-      flex-shrink: 0;
-      animation: popIn 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-      position: relative;
+      gap: 0 1.4vw;
+      min-width: 0;
+      padding: 0.6vh 1.4vw;
+      background: rgba(45,48,51,0.55);
+      border: 0.25vh solid var(--card-border);
+      border-radius: 1.2vh;
+      animation: rowIn 0.25s ease both;
+    }
+    .result-row.is-winner {
+      background: linear-gradient(135deg, rgba(255,105,0,0.32), rgba(255,105,0,0.14));
+      border-color: var(--accent-orange);
+      box-shadow: 0 0 3vh rgba(255,105,0,0.35);
+    }
+
+    .rank-chip {
+      font-size: calc(var(--row-fs) * 0.82);
+      font-weight: 900; line-height: 1;
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+      min-width: 1.6em; text-align: center;
+    }
+    .is-winner .rank-chip { color: var(--accent-orange); }
+
+    .who { min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+    .who .name {
+      font-size: var(--row-fs); font-weight: 900; line-height: 1.02;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+      letter-spacing: -0.01em;
+    }
+    .who .team {
+      font-size: calc(var(--row-fs) * 0.4); font-weight: 700; line-height: 1.2;
+      color: var(--accent-orange); text-transform: uppercase; letter-spacing: 0.04em;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+
+    .stat { text-align: right; line-height: 1; }
+    .stat .time {
+      font-size: calc(var(--row-fs) * 0.74); font-weight: 900;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
+    }
+    .stat .gap {
+      font-size: calc(var(--row-fs) * 0.38); font-weight: 700;
+      color: var(--text-muted); font-variant-numeric: tabular-nums;
+      margin-top: 0.3vh;
+    }
+    .is-winner .stat .time { color: #ffd6b0; }
+
+    /* Overlaid rather than a flex sibling: as a sibling, the empty
+       results grid still claimed its share of the row and pushed this
+       off-centre. */
+    #stage-empty {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 5vh; font-weight: 700; font-style: italic; color: var(--text-muted);
+      text-align: center; padding: 0 4vw;
+    }
+
+    /* ---------- Countdown: covers the stage, sized to dominate ---------- */
+    #countdown-layer {
+      display: none;
+      position: absolute; inset: 0; z-index: 50;
+      flex-direction: column; align-items: center; justify-content: center;
+      gap: 1vh;
+      background: var(--bg-dark);
+      border: 0.5vh solid var(--accent-orange);
+      border-radius: 1.6vh;
       overflow: hidden;
     }
+    #countdown-layer.visible { display: flex; }
+    body.is-live #countdown-layer { background: #06220f; border-color: #4ade80; }
 
-    .hero-countdown-content {
-      display: flex;
-      align-items: center;
-      gap: 24px;
-      z-index: 2;
+    .cd-phase {
+      font-size: 5vh; font-weight: 900; text-transform: uppercase;
+      letter-spacing: 0.12em; color: var(--accent-orange); text-align: center;
     }
-
-    .fox-avatar {
-      font-size: 4rem;
-      display: inline-block;
-      filter: drop-shadow(0 4px 8px rgba(0,0,0,0.5));
-      transition: transform 0.2s ease;
+    .cd-number {
+      font-size: 34vh; font-weight: 900; line-height: 0.88;
+      letter-spacing: -0.03em;
+      display: flex; align-items: center; gap: 2vw;
     }
+    .cd-mascot { font-size: 14vh; line-height: 1; }
 
-    /* Animated Poses */
-    .fox-waiting { animation: foxBounce 2s infinite ease-in-out; }
-    .fox-ready { animation: foxAlert 0.4s infinite alternate ease-in-out; }
-    .fox-live { animation: foxJump 0.5s infinite alternate cubic-bezier(0.68, -0.55, 0.265, 1.55); }
-
-    .countdown-text-group {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-    }
-
-    .countdown-phase-label {
-      font-size: 1rem;
-      font-weight: 900;
-      color: var(--accent-orange);
-      text-transform: uppercase;
-      letter-spacing: 0.15em;
-    }
-
-    .countdown-main-number {
-      font-size: 3.5rem;
-      font-weight: 900;
-      line-height: 1;
-      margin-top: 4px;
-      text-shadow: 0 0 12px rgba(255,255,255,0.4);
-    }
-
-    /* Dynamic Stage Colors */
-    .stage-sync { color: var(--accent-orange); }
-    .stage-red { color: #ff4d4d; animation: pulseGlow 0.5s infinite alternate; }
+    .stage-sync   { color: var(--accent-orange); }
+    .stage-red    { color: #ff4d4d; animation: pulseGlow 0.5s infinite alternate; }
     .stage-purple { color: #c084fc; animation: pulseGlow 0.5s infinite alternate; }
     .stage-orange { color: #fb923c; animation: pulseGlow 0.5s infinite alternate; }
-    .stage-live { color: #4ade80; text-shadow: 0 0 20px #22c55e; }
+    .stage-live   { color: #4ade80; text-shadow: 0 0 6vh rgba(74,222,128,0.6); }
 
-    /* Keyframe Animations */
-    @keyframes popIn {
-      0% { transform: scale(0.8); opacity: 0; }
-      100% { transform: scale(1); opacity: 1; }
-    }
-
-    @keyframes foxBounce {
-      0%, 100% { transform: translateY(0) rotate(0deg); }
-      50% { transform: translateY(-6px) rotate(-3deg); }
-    }
-
-    @keyframes foxAlert {
-      0% { transform: scale(1) rotate(-4deg); }
-      100% { transform: scale(1.1) rotate(4deg); }
-    }
-
-    @keyframes foxJump {
-      0% { transform: translateY(0) scale(1); }
-      100% { transform: translateY(-16px) scale(1.25); }
-    }
-
-    @keyframes pulseGlow {
-      0% { transform: scale(0.98); opacity: 0.8; }
-      100% { transform: scale(1.04); opacity: 1; }
-    }
-
-    /* Event Banners */
-    #event-feed { display: flex; flex-direction: column; gap: 8px; flex-shrink: 0; }
-    .winner-banner, .foul-banner, .premature-banner {
-      border-radius: 10px; 
-      padding: 12px 20px;
-      display: flex; 
-      justify-content: space-between; 
-      align-items: center;
-      box-shadow: 0 6px 16px rgba(0,0,0,0.4);
-    }
-    
-    .winner-banner { 
-      background: linear-gradient(135deg, #1e3a8a, var(--accent-blue)); 
-      border: 2px solid #ffffff; 
-      animation: pulse-border 0.6s infinite alternate;
-    }
-    .foul-banner { background: linear-gradient(135deg, #7f1d1d, var(--danger-red)); border: 2px solid #ff8e7d; }
-    .premature-banner { background: linear-gradient(135deg, #713f12, var(--accent-orange)); border: 2px solid var(--accent-yellow); }
-
-    .banner-title { font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 800; }
-    .banner-name { font-size: 1.8rem; font-weight: 900; line-height: 1.1; margin-top: 2px; color: var(--text-white); }
-    .banner-sub { font-size: 1.05rem; margin-top: 2px; color: #dbeafe; }
-    .banner-stat { font-size: 1.7rem; font-family: monospace; font-weight: 900; text-align: right; color: var(--text-white); }
-
-    /* Main Content Grid */
-    .main-content {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 16px;
-      flex-grow: 1;
-      min-height: 0;
-    }
-
-    .card { 
-      background: var(--card-bg); 
-      border-radius: 10px; 
-      padding: 16px; 
-      border: 1px solid var(--card-border); 
-      box-shadow: 0 6px 18px rgba(0,0,0,0.3); 
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-    }
-
-    .card h2 { 
-      font-size: 1.15rem; 
-      margin-bottom: 8px; 
-      color: var(--accent-orange); 
-      text-transform: uppercase; 
-      letter-spacing: 0.08em; 
-      font-weight: 800;
-      border-bottom: 2px solid var(--card-border);
-      padding-bottom: 6px;
+    /* ---------- Fouls: only occupies space when there are fouls ---------- */
+    #fouls-strip {
       flex-shrink: 0;
+      display: none;
+      align-items: center; gap: 1.2vw;
+      padding: 0.9vh 1.4vw;
+      background: linear-gradient(135deg, rgba(127,29,29,0.85), rgba(217,56,30,0.7));
+      border: 0.3vh solid #ff8e7d; border-radius: 1.2vh;
+      overflow: hidden;
+    }
+    #fouls-strip.visible { display: flex; }
+    .fouls-label {
+      font-size: 3.4vh; font-weight: 900; text-transform: uppercase;
+      letter-spacing: 0.06em; color: #ffd9d4; white-space: nowrap;
+      border-right: 0.3vh solid rgba(255,255,255,0.3); padding-right: 1vw;
+    }
+    .fouls-list { display: flex; gap: 1.2vw; overflow: hidden; align-items: center; }
+    .fouls-list { font-size: 6.5vh; }
+    .foul-chip {
+      display: flex; align-items: baseline; gap: 0.6vw; white-space: nowrap;
+      font-size: 1em; font-weight: 900;
+    }
+    .foul-chip .fname { color: #fff; }
+    .foul-chip .fpen {
+      font-size: 0.72em; font-weight: 800; color: #ffd9d4;
+      font-family: ui-monospace, monospace;
     }
 
-    .table-container { flex-grow: 1; overflow-y: auto; }
-    table { width: 100%; border-collapse: collapse; text-align: left; }
-    th { padding: 10px 12px; border-bottom: 2px solid var(--card-border); color: var(--text-muted); font-size: 0.95rem; text-transform: uppercase; }
-    td { padding: 12px 12px; border-bottom: 1px solid var(--card-border); font-size: 1.15rem; }
+    /* ---------- Transient event toast (premature press) ---------- */
+    #toast {
+      display: none;
+      position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%);
+      z-index: 60; text-align: center;
+      padding: 3vh 5vw; border-radius: 2vh;
+      background: linear-gradient(135deg, #713f12, var(--accent-orange));
+      border: 0.4vh solid var(--accent-yellow);
+      box-shadow: 0 2vh 6vh rgba(0,0,0,0.7);
+      animation: rowIn 0.25s ease both;
+    }
+    #toast.visible { display: block; }
+    #toast .t-title {
+      font-size: 3.2vh; font-weight: 900; text-transform: uppercase;
+      letter-spacing: 0.08em; color: #fde047;
+    }
+    #toast .t-name { font-size: 9vh; font-weight: 900; line-height: 1.05; margin-top: 0.6vh; }
+    #toast .t-sub { font-size: 3vh; font-weight: 700; color: #fef08a; font-style: italic; }
 
-    .rank-1 { color: #ffffff; font-weight: 900; background: rgba(255, 105, 0, 0.25); }
-    .rank-1 td:first-child::before { content: "🔔 "; }
-    .foul-row { color: #ff8e7d; font-weight: bold; }
-    .empty-state { text-align: center; padding: 30px; color: var(--text-muted); font-size: 1.1rem; font-style: italic; }
-
+    /* ---------- Clue overlay ---------- */
     .clue-overlay {
-      position: fixed;
-      top: 0; left: 0;
-      width: 100vw; height: 100vh;
-      background-color: var(--bg-dark);
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      padding: 5% 10%;
-      box-sizing: border-box;
-      z-index: 1000;
+      position: fixed; inset: 0; z-index: 1000;
+      background: var(--bg-dark);
+      display: none; align-items: center; justify-content: center;
+      padding: 6vh 6vw;
     }
-
+    .clue-overlay.visible { display: flex; }
     .clue-text {
-      font-family: 'Georgia', 'Times New Roman', serif;
-      color: var(--text-white);
-      font-size: 4.5vw;
-      line-height: 1.3;
-      text-align: center;
-      text-transform: uppercase;
-      text-shadow: 
-        1px 1px 1px #000,
-        3px 3px 6px rgba(0,0,0,0.8),
-        2px 2px 3px #000;
+      font-family: Georgia, 'Times New Roman', serif;
+      font-size: 9vh; line-height: 1.25; text-align: center; text-transform: uppercase;
+      text-shadow: 0.1vh 0.1vh 0.1vh #000, 0.3vh 0.3vh 0.6vh rgba(0,0,0,0.8);
     }
 
-    @keyframes pulse-border {
-      0% { box-shadow: 0 0 0 0 rgba(255, 105, 0, 0.8); }
-      100% { box-shadow: 0 0 0 16px rgba(255, 105, 0, 0); }
+    @keyframes rowIn { from { opacity: 0; transform: translateY(1.5vh); } to { opacity: 1; transform: none; } }
+    @keyframes pulseGlow { 0% { transform: scale(0.98); opacity: 0.85; } 100% { transform: scale(1.03); opacity: 1; } }
+
+    @media (prefers-reduced-motion: reduce) {
+      .result-row, #toast { animation: none; }
+      .stage-red, .stage-purple, .stage-orange { animation: none; }
     }
   </style>
 </head>
@@ -360,109 +304,41 @@
     </div>
   </header>
 
-  <!-- Active Buzzer Roster Strip -->
   <div class="roster-strip">
-    <div class="roster-title">Active Roster</div>
+    <div class="roster-title">Roster</div>
     <div id="roster-grid" class="roster-grid">
       <span class="roster-empty">No buzzers connected...</span>
     </div>
   </div>
 
-  <!-- ANIMATED HERO COUNTDOWN CARD (TOP-CENTER) -->
-  <div id="hero-countdown" class="hero-countdown-overlay">
-    <div class="hero-countdown-content">
-      <span id="fox-mascot" class="fox-avatar fox-waiting"></span>
-      <div class="countdown-text-group">
-        <span id="hero-phase-title" class="countdown-phase-label">GET READY</span>
-        <span id="hero-number" class="countdown-main-number stage-sync">READY</span>
-      </div>
+  <main class="stage">
+    <div id="results-area"></div>
+    <div id="stage-empty">Waiting for the next question...</div>
+
+    <div id="countdown-layer">
+      <span id="cd-phase" class="cd-phase">Get ready</span>
+      <span id="cd-number" class="cd-number stage-sync">
+        <span id="cd-mascot" class="cd-mascot"></span><span id="cd-value">Ready</span>
+      </span>
     </div>
+
+    <div id="toast">
+      <div class="t-title">Premature press</div>
+      <div id="toast-name" class="t-name"></div>
+      <div id="toast-sub" class="t-sub"></div>
+    </div>
+  </main>
+
+  <div id="fouls-strip">
+    <div class="fouls-label">Early buzz</div>
+    <div id="fouls-list" class="fouls-list"></div>
   </div>
 
-  <!-- Live Event Spotlights -->
-  <div id="event-feed">
-    <div id="winner-spotlight" class="winner-banner" style="display: none;">
-      <div>
-        <div class="banner-title" style="color: #93c5fd;">Active Buzz In</div>
-        <div id="winner-name" class="banner-name"></div>
-        <div id="winner-team" class="banner-sub"></div>
-      </div>
-      <div>
-        <div class="banner-title" style="color: #93c5fd; text-align: right;">Reaction Time</div>
-        <div id="winner-time" class="banner-stat">+0.240s</div>
-      </div>
-    </div>
-
-    <div id="foul-spotlight" class="foul-banner" style="display: none;">
-      <div>
-        <div class="banner-title" style="color: #fca5a5;">⚠️ Early Buzz Foul</div>
-        <div id="foul-name" class="banner-name"></div>
-        <div id="foul-team" class="banner-sub" style="color: #fecaca;"></div>
-      </div>
-      <div>
-        <div class="banner-title" style="color: #fca5a5; text-align: right;">Buzzed Early By</div>
-        <div id="foul-time" class="banner-stat" style="color: #fecaca;">0.240s</div>
-      </div>
-    </div>
-
-    <div id="premature-spotlight" class="premature-banner" style="display: none;">
-      <div>
-        <div class="banner-title" style="color: #fde047;">⚡ Premature Button Press</div>
-        <div id="premature-name" class="banner-name"></div>
-        <div id="premature-msg" class="banner-sub" style="color: #fef08a; font-style: italic;"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Main Content Grid -->
-  <div class="main-content">
-    <div class="card">
-      <h2>Live Buzz Order</h2>
-      <div class="table-container">
-        <table>
-          <thead>
-            <tr>
-              <th>Rank</th>
-              <th>Player</th>
-              <th>Team</th>
-              <th>Reaction</th>
-              <th>Behind 1st</th>
-            </tr>
-          </thead>
-          <tbody id="rankings-table">
-            <tr><td colspan="5" class="empty-state">Waiting for question to start...</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-
-    <div class="card">
-      <h2>Early Buzz Fouls</h2>
-      <div class="table-container">
-        <table>
-          <thead>
-            <tr>
-              <th>Player</th>
-              <th>Team</th>
-              <th>Penalty Time</th>
-              <th>Status</th>
-            </tr>
-          </thead>
-          <tbody id="fouls-table">
-            <tr><td colspan="4" class="empty-state">No early buzzes recorded.</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-
-  <!-- Full Screen Clue Overlay Modal -->
-  <div id="clue-modal" class="clue-overlay" style="display: none;">
+  <div id="clue-modal" class="clue-overlay">
     <p id="clue-modal-text" class="clue-text"></p>
   </div>
 
   <script>
-    const host = window.location.hostname || 'localhost';
     // ------------------------------------------------------------------
     // BRANDING
     // window.APP_CONFIG is injected by the server from config.json. The
@@ -489,45 +365,128 @@
 
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const SERVER_URL = `${protocol}//${window.location.host}`;
-    
+
+    // Display-only clock sync, matching the other clients. Sent without a
+    // playerId so the TV is never registered as a buzzer.
+    const SYNC_BURST_SAMPLES = 5;
+    const SYNC_BURST_SPACING_MS = 90;
+    const RESYNC_INTERVAL_MS = 60000;
+    const SYNC_EMA_ALPHA = 0.25;
+    const MAX_PLAUSIBLE_RTT_MS = 2000;
+
     let socket;
     let animFrameId = null;
     let syncStartTime = null;
     let greenTargetTime = null;
     let foulsList = [];
-    let prematureTimeout = null;
+    let toastTimeout = null;
+    let liveHideTimeout = null;
 
-    function init() {
-      connect();
-    }
+    let clockOffsetMs = 0;
+    let isCalibrated = false;
+    let burstSamples = [];
+    let pendingSamples = new Map();
+    let sampleCounter = 0;
+    let resyncTimer = null;
+    let burstTimer = null;
+
+    function serverNow() { return Date.now() + clockOffsetMs; }
 
     function escapeHTML(str) {
       if (!str) return '';
-      return String(str).replace(/[&<>'"]/g, 
+      return String(str).replace(/[&<>'"]/g,
         tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[tag] || tag)
       );
     }
 
+    // ==================================================================
+    // CLOCK SYNC
+    // ==================================================================
+    function sendSyncSample(isPeriodic) {
+      if (!socket || socket.readyState !== WebSocket.OPEN) return;
+      sampleCounter++;
+      const t0 = Date.now();
+      pendingSamples.set(sampleCounter, t0);
+      socket.send(JSON.stringify({
+        type: 'SYNC_REQUEST', t0: t0, sampleIndex: sampleCounter, isPeriodic: !!isPeriodic
+      }));
+    }
+
+    function startSyncBurst() {
+      if (burstTimer) { clearTimeout(burstTimer); burstTimer = null; }
+      burstSamples = [];
+      let sent = 0;
+      const fire = () => {
+        burstTimer = null;
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        sendSyncSample(false);
+        sent++;
+        if (sent < SYNC_BURST_SAMPLES) burstTimer = setTimeout(fire, SYNC_BURST_SPACING_MS);
+      };
+      fire();
+    }
+
+    function scheduleResync() {
+      if (resyncTimer) clearInterval(resyncTimer);
+      resyncTimer = setInterval(() => {
+        if (animFrameId) return;
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+        sendSyncSample(true);
+      }, RESYNC_INTERVAL_MS);
+    }
+
+    function handleSyncResponse(data) {
+      const t3 = Date.now();
+      const t0 = pendingSamples.has(data.sampleIndex) ? pendingSamples.get(data.sampleIndex) : data.t0;
+      pendingSamples.delete(data.sampleIndex);
+      if (typeof t0 !== 'number' || typeof data.t1 !== 'number' || typeof data.t2 !== 'number') return;
+
+      const rtt = (t3 - t0) - (data.t2 - data.t1);
+      const offset = ((data.t1 - t0) + (data.t2 - t3)) / 2;
+      if (rtt < 0 || rtt > MAX_PLAUSIBLE_RTT_MS) return;
+
+      if (data.isPeriodic && isCalibrated) {
+        clockOffsetMs = Math.round((SYNC_EMA_ALPHA * offset) + ((1 - SYNC_EMA_ALPHA) * clockOffsetMs));
+      } else {
+        burstSamples.push({ rtt, offset });
+        let best = burstSamples[0];
+        for (const s of burstSamples) if (s.rtt < best.rtt) best = s;
+        if (!isCalibrated || burstSamples.length >= SYNC_BURST_SAMPLES) {
+          clockOffsetMs = Math.round(best.offset);
+        }
+        if (burstSamples.length >= SYNC_BURST_SAMPLES) isCalibrated = true;
+      }
+    }
+
+    // ==================================================================
+    // CONNECTION
+    // ==================================================================
     function connect() {
       socket = new WebSocket(SERVER_URL);
 
       socket.onopen = () => {
         const badge = document.getElementById('connection-status');
-        badge.textContent = 'TV Display Online';
+        badge.textContent = 'Online';
         badge.className = 'status-badge connected';
+        isCalibrated = false;
+        burstSamples = [];
+        pendingSamples.clear();
+        startSyncBurst();
+        scheduleResync();
       };
 
       socket.onclose = () => {
         const badge = document.getElementById('connection-status');
-        badge.textContent = 'Offline (Retrying)';
+        badge.textContent = 'Offline (retrying)';
         badge.className = 'status-badge disconnected';
+        if (resyncTimer) { clearInterval(resyncTimer); resyncTimer = null; }
+        if (burstTimer) { clearTimeout(burstTimer); burstTimer = null; }
         setTimeout(connect, 2000);
       };
 
       socket.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data);
-          handleServerMessage(data);
+          handleServerMessage(JSON.parse(event.data));
         } catch (e) {
           console.error("Failed to parse socket message", e);
         }
@@ -536,6 +495,10 @@
 
     function handleServerMessage(data) {
       switch (data.type) {
+        case 'SYNC_RESPONSE':
+          handleSyncResponse(data);
+          break;
+
         case 'DEVICE_LIST_UPDATE':
           renderRoster(data.devices || data.players);
           break;
@@ -543,24 +506,24 @@
         case 'SCHEDULED_TIMER_START':
           syncStartTime = data.syncStartTime;
           greenTargetTime = data.greenTargetTime;
+          clearResults();
+          foulsList = [];
+          renderFouls(foulsList);
+          hideToast();
           startCountdownUI();
-          clearTables();
-          document.getElementById('winner-spotlight').style.display = 'none';
-          document.getElementById('foul-spotlight').style.display = 'none';
-          document.getElementById('premature-spotlight').style.display = 'none';
           break;
 
         case 'ROUND_RESET':
           stopTimerUI();
-          document.getElementById('hero-countdown').style.display = 'none';
+          document.body.classList.remove('is-live', 'hide-roster');
+          document.getElementById('countdown-layer').classList.remove('visible');
           document.getElementById('timer-box').textContent = 'Ready to Sync';
           document.getElementById('timer-box').style.color = 'var(--accent-orange)';
-          document.getElementById('winner-spotlight').style.display = 'none';
-          document.getElementById('foul-spotlight').style.display = 'none';
-          document.getElementById('premature-spotlight').style.display = 'none';
-          document.getElementById('clue-modal').style.display = 'none';
-          clearTables();
+          document.getElementById('clue-modal').classList.remove('visible');
+          hideToast();
+          clearResults();
           foulsList = [];
+          renderFouls(foulsList);
           break;
 
         case 'SHOW_CLUE':
@@ -568,121 +531,280 @@
           break;
 
         case 'PREMATURE_PRESS':
-          showPrematureSpotlight(data);
+          showToast(data);
           break;
 
         case 'FOUL_EVENT':
           foulsList.push(data.foul);
           renderFouls(foulsList);
-          showFoulSpotlight(data.foul);
           break;
 
         case 'RANKINGS_UPDATE':
           renderRankings(data.rankings);
-          showWinnerSpotlight(data.rankings[0]);
           break;
       }
     }
 
+    // ==================================================================
+    // ROSTER
+    // ==================================================================
     function renderRoster(devices) {
-      const rosterContainer = document.getElementById('roster-grid');
+      const el = document.getElementById('roster-grid');
       if (!devices || devices.length === 0) {
-        rosterContainer.innerHTML = `<span class="roster-empty">No buzzers connected...</span>`;
+        el.innerHTML = `<span class="roster-empty">No buzzers connected...</span>`;
         return;
       }
+      el.innerHTML = devices.map(d => `
+        <div class="buzzer-badge">
+          <span class="dot"></span>
+          <span class="player-name">${escapeHTML(d.displayName || d.playerId || 'Buzzer')}</span>
+          <span class="team-tag">${escapeHTML(d.teamName || 'Solo')}</span>
+        </div>
+      `).join('');
+    }
 
-      rosterContainer.innerHTML = devices.map(d => {
-        const name = escapeHTML(d.displayName || d.playerId || 'Buzzer');
-        const team = escapeHTML(d.teamName || 'Solo');
-        const statusClass = d.status || 'online';
+    // ==================================================================
+    // RESULTS - the part that has to read at 15 ft
+    // ==================================================================
+    // Row text is sized from the height each row actually receives, so a
+    // single buzz fills the screen and eight still clear the legibility
+    // floor. Past four entries we split into two columns rather than let
+    // the type collapse.
+    const MIN_ROW_FS_PX = 30;
+    const MAX_ROW_FS_PX = 190;
+    const REF_FS = 100;   // reference size for width measurement
 
+    const measureCtx = document.createElement('canvas').getContext('2d');
+    function textWidthAtRef(text, weight, family) {
+      measureCtx.font = weight + ' ' + REF_FS + 'px ' + family;
+      return measureCtx.measureText(text).width / REF_FS;
+    }
+
+    // Two constraints fight each other: row height caps how tall the type
+    // can be, and column width caps how wide a name can get. A name like
+    // "Christopher" in two columns is width-limited long before it is
+    // height-limited, so we solve both and take the smaller. Then we let
+    // one- and two-column layouts compete and keep whichever yields the
+    // larger type - long names win in one column, many short names win in
+    // two.
+    function sizeResults() {
+      const area = document.getElementById('results-area');
+      const rows = Array.from(area.querySelectorAll('.result-row'));
+      const n = rows.length;
+      if (!n) return;
+
+      const sans = 'system-ui, -apple-system, sans-serif';
+      const mono = 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace';
+
+      // Per-row width demand, expressed per 1px of font size.
+      let widthPerPx = 0;
+      for (const row of rows) {
+        const name = row.querySelector('.name').textContent.trim();
+        const time = row.querySelector('.time').textContent.trim();
+        const demand = 0.82 * 1.6                                // rank chip min-width
+          + textWidthAtRef(name, '900', sans)
+          + 0.74 * textWidthAtRef(time, '900', mono);
+        if (demand > widthPerPx) widthPerPx = demand;
+      }
+
+      const vw = window.innerWidth / 100;
+      const vh = window.innerHeight / 100;
+      const fixedPx = 4 * 1.4 * vw;      // row padding x2 + two grid gaps
+      const colGapPx = 1.2 * vw;
+      const rowGapPx = 1 * vh;
+
+      let best = { cols: 1, fs: 0 };
+      for (const cols of [1, 2]) {
+        if (cols > n) continue;
+        const perCol = Math.ceil(n / cols);
+        const colW = (area.clientWidth - (cols - 1) * colGapPx) / cols;
+        const rowH = (area.clientHeight - (perCol - 1) * rowGapPx) / perCol;
+
+        // 0.44 of row height keeps the name plus its team line inside.
+        const byHeight = rowH * 0.44;
+        const byWidth = (colW - fixedPx) / widthPerPx;
+        const fs = Math.min(byHeight, byWidth);
+        if (fs > best.fs) best = { cols, fs };
+      }
+
+      const fs = Math.max(MIN_ROW_FS_PX, Math.min(best.fs, MAX_ROW_FS_PX));
+      area.style.setProperty('--cols', best.cols);
+      area.style.setProperty('--row-fs', fs + 'px');
+    }
+
+    function clearResults() {
+      document.getElementById('results-area').innerHTML = '';
+      document.getElementById('stage-empty').style.display = 'flex';
+    }
+
+    function renderRankings(rankings) {
+      if (!rankings || rankings.length === 0) return;
+
+      document.getElementById('stage-empty').style.display = 'none';
+      document.body.classList.add('hide-roster');
+
+      const area = document.getElementById('results-area');
+      area.innerHTML = rankings.map(r => {
+        const secs = (r.reactionTimeMs / 1000).toFixed(2);
+        const gap = r.behindWinnerMs === 0 ? 'fastest' : `+${r.behindWinnerMs.toFixed(0)}ms`;
         return `
-          <div class="buzzer-badge">
-            <span class="dot ${statusClass}"></span>
-            <span class="player-name">${name}</span>
-            <span class="team-tag">${team}</span>
+          <div class="result-row ${r.rank === 1 ? 'is-winner' : ''}">
+            <div class="rank-chip">${r.rank}</div>
+            <div class="who">
+              <div class="name">${escapeHTML(r.displayName)}</div>
+              <div class="team">${escapeHTML(r.teamName)}</div>
+            </div>
+            <div class="stat">
+              <div class="time">${secs}s</div>
+              <div class="gap">${gap}</div>
+            </div>
           </div>
         `;
       }).join('');
+
+      sizeResults();
+    }
+
+    function foulChipHtml(f) {
+      return `<span class="foul-chip">`
+        + `<span class="fname">${escapeHTML(f.displayName)}</span>`
+        + `<span class="fpen">-${(f.earlyMs / 1000).toFixed(2)}s</span>`
+        + `</span>`;
+    }
+
+    function renderFouls(fouls) {
+      const strip = document.getElementById('fouls-strip');
+      const list = document.getElementById('fouls-list');
+
+      if (!fouls || fouls.length === 0) {
+        strip.classList.remove('visible');
+        list.innerHTML = '';
+        list.style.removeProperty('font-size');
+        sizeResults();
+        return;
+      }
+
+      strip.classList.add('visible');
+
+      // Fit by shrinking first, then by shedding names. Clipping a foul
+      // name off the edge of the screen looks broken; an explicit
+      // "+2 more" does not.
+      const vh = window.innerHeight / 100;
+      const maxFs = 6.5 * vh, minFs = 4.5 * vh;
+      let shown = fouls.length;
+
+      const render = (count, fs) => {
+        const extra = fouls.length - count;
+        list.style.fontSize = fs + 'px';
+        list.innerHTML = fouls.slice(0, count).map(foulChipHtml).join('')
+          + (extra > 0 ? `<span class="foul-chip"><span class="fpen">+${extra} more</span></span>` : '');
+      };
+
+      render(shown, maxFs);
+      let fs = maxFs;
+      while (list.scrollWidth > list.clientWidth + 1) {
+        if (fs > minFs) {
+          fs = Math.max(minFs, fs - 2);
+          render(shown, fs);
+        } else if (shown > 1) {
+          shown--;
+          render(shown, fs);
+        } else {
+          break;
+        }
+      }
+
+      sizeResults();
+    }
+
+    // ==================================================================
+    // TRANSIENT EVENTS
+    // ==================================================================
+    function showToast(data) {
+      const toast = document.getElementById('toast');
+      document.getElementById('toast-name').textContent = data.displayName || '';
+      document.getElementById('toast-sub').textContent = data.teamName ? `Team ${data.teamName}` : '';
+      toast.classList.add('visible');
+      if (toastTimeout) clearTimeout(toastTimeout);
+      toastTimeout = setTimeout(hideToast, 3500);
+    }
+
+    function hideToast() {
+      if (toastTimeout) { clearTimeout(toastTimeout); toastTimeout = null; }
+      document.getElementById('toast').classList.remove('visible');
     }
 
     function showClueOverlay(text) {
-      const modal = document.getElementById('clue-modal');
-      const clueEl = document.getElementById('clue-modal-text');
-      clueEl.textContent = text;
-      modal.style.display = 'flex';
+      document.getElementById('clue-modal-text').textContent = text;
+      document.getElementById('clue-modal').classList.add('visible');
     }
 
+    // ==================================================================
+    // COUNTDOWN
+    // ==================================================================
     function startCountdownUI() {
       stopTimerUI();
-      const heroCard = document.getElementById('hero-countdown');
-      const foxMascot = document.getElementById('fox-mascot');
-      const heroTitle = document.getElementById('hero-phase-title');
-      const heroNumber = document.getElementById('hero-number');
-      const timerTextEl = document.getElementById('timer-box');
+      if (liveHideTimeout) { clearTimeout(liveHideTimeout); liveHideTimeout = null; }
 
-      heroCard.style.display = 'flex';
+      const layer = document.getElementById('countdown-layer');
+      const phase = document.getElementById('cd-phase');
+      const value = document.getElementById('cd-value');
+      const number = document.getElementById('cd-number');
+      const mascot = document.getElementById('cd-mascot');
+      const timerBox = document.getElementById('timer-box');
+
+      layer.classList.add('visible');
+      document.body.classList.remove('is-live');
+      document.body.classList.add('hide-roster');
 
       function updateDisplay() {
-        const now = Date.now();
-        const syncRemainingMs = syncStartTime - now;
-        const syncRemainingSec = Math.ceil(syncRemainingMs / 1000);
+        // Server clock, not the TV's own. A stick or set-top box with a
+        // drifting clock would otherwise show the lights early or late.
+        const now = serverNow();
+        const syncRemainingSec = Math.ceil((syncStartTime - now) / 1000);
         const msUntilGreen = greenTargetTime - now;
 
         if (syncRemainingSec > 0) {
-          // Phase 1: Syncing
-          timerTextEl.textContent = `${syncRemainingSec}s to Sync`;
-          timerTextEl.style.color = 'var(--accent-orange)';
-          
-          heroTitle.textContent = "SYNCHRONIZING CLOCKS";
-          heroNumber.textContent = `${syncRemainingSec}s`;
-          heroNumber.className = "countdown-main-number stage-sync";
-          foxMascot.className = "fox-avatar fox-waiting";
-          foxMascot.textContent = MASCOT;
-          
+          timerBox.textContent = `${syncRemainingSec}s to sync`;
+          timerBox.style.color = 'var(--accent-orange)';
+          phase.textContent = 'Synchronizing buzzers';
+          value.textContent = `${syncRemainingSec}`;
+          number.className = 'cd-number stage-sync';
+          mascot.textContent = MASCOT;
           animFrameId = requestAnimationFrame(updateDisplay);
         } else if (msUntilGreen > 0) {
-          // Phase 2: Live Countdown (3, 2, 1)
-          timerTextEl.textContent = "COUNTDOWN ACTIVE";
-          timerTextEl.style.color = 'var(--accent-yellow)';
-          
-          foxMascot.className = "fox-avatar fox-ready";
+          timerBox.textContent = 'Countdown';
+          timerBox.style.color = 'var(--accent-yellow)';
+          mascot.textContent = MASCOT;
 
           if (msUntilGreen > 2000) {
-            heroTitle.textContent = "HANDS ON BUZZERS!";
-            heroNumber.textContent = "3 🔴";
-            heroNumber.className = "countdown-main-number stage-red";
-            foxMascot.textContent = MASCOT;
+            phase.textContent = 'Hands on buzzers';
+            value.textContent = '3';
+            number.className = 'cd-number stage-red';
           } else if (msUntilGreen > 1000) {
-            heroTitle.textContent = "GET READY...";
-            heroNumber.textContent = "2 🟣";
-            heroNumber.className = "countdown-main-number stage-purple";
-            foxMascot.textContent = "😼";
+            phase.textContent = 'Get ready';
+            value.textContent = '2';
+            number.className = 'cd-number stage-purple';
           } else {
-            heroTitle.textContent = "SET...";
-            heroNumber.textContent = "1 🟠";
-            heroNumber.className = "countdown-main-number stage-orange";
-            foxMascot.textContent = "💥";
+            phase.textContent = 'Set';
+            value.textContent = '1';
+            number.className = 'cd-number stage-orange';
           }
-          
           animFrameId = requestAnimationFrame(updateDisplay);
         } else {
-          // Phase 3: LIVE
-          timerTextEl.textContent = "BUZZERS LIVE!";
-          timerTextEl.style.color = 'var(--accent-green)';
-          
-          heroTitle.textContent = "BUZZ IN NOW!";
-          heroNumber.textContent = "GO! 🟢";
-          heroNumber.className = "countdown-main-number stage-live";
-          foxMascot.className = "fox-avatar fox-live";
-          foxMascot.textContent = MASCOT + "🚀";
+          timerBox.textContent = 'Buzzers live';
+          timerBox.style.color = 'var(--accent-green)';
+          phase.textContent = 'Buzz in now';
+          value.textContent = 'GO';
+          number.className = 'cd-number stage-live';
+          mascot.textContent = MASCOT;
+          document.body.classList.add('is-live');
+          stopTimerUI();
 
-          // Auto-hide hero overlay 2 seconds after going live
-          setTimeout(() => {
-            if (now >= greenTargetTime) {
-              heroCard.style.display = 'none';
-            }
-          }, 2000);
+          liveHideTimeout = setTimeout(() => {
+            layer.classList.remove('visible');
+            document.body.classList.remove('is-live');
+          }, 1800);
         }
       }
       animFrameId = requestAnimationFrame(updateDisplay);
@@ -692,70 +814,14 @@
       if (animFrameId) { cancelAnimationFrame(animFrameId); animFrameId = null; }
     }
 
-    function clearTables() {
-      document.getElementById('rankings-table').innerHTML = `<tr><td colspan="5" class="empty-state">Waiting for question to start...</td></tr>`;
-      document.getElementById('fouls-table').innerHTML = `<tr><td colspan="4" class="empty-state">No early buzzes recorded.</td></tr>`;
+    // Re-size on any viewport change, and when the fouls strip appears or
+    // disappears and changes the height available to the results.
+    if (window.ResizeObserver) {
+      new ResizeObserver(sizeResults).observe(document.getElementById('results-area'));
     }
+    window.addEventListener('resize', sizeResults);
 
-    function showPrematureSpotlight(data) {
-      const banner = document.getElementById('premature-spotlight');
-      document.getElementById('premature-name').textContent = `${escapeHTML(data.displayName)}`;
-      document.getElementById('premature-msg').textContent = `"Team: ${escapeHTML(data.teamName)}"`;
-      
-      banner.style.display = 'flex';
-
-      if (prematureTimeout) clearTimeout(prematureTimeout);
-      prematureTimeout = setTimeout(() => { banner.style.display = 'none'; }, 4000);
-    }
-
-    function showWinnerSpotlight(winner) {
-      if (!winner) return;
-      const banner = document.getElementById('winner-spotlight');
-      banner.style.display = 'flex';
-      document.getElementById('winner-name').textContent = escapeHTML(winner.displayName);
-      document.getElementById('winner-team').textContent = `Team: ${escapeHTML(winner.teamName)}`;
-      document.getElementById('winner-time').textContent = `+${(winner.reactionTimeMs / 1000).toFixed(3)}s`;
-    }
-
-    function showFoulSpotlight(foul) {
-      if (!foul) return;
-      const banner = document.getElementById('foul-spotlight');
-      banner.style.display = 'flex';
-      document.getElementById('foul-name').textContent = escapeHTML(foul.displayName);
-      document.getElementById('foul-team').textContent = `Team: ${escapeHTML(foul.teamName)}`;
-      document.getElementById('foul-time').textContent = `${(foul.earlyMs / 1000).toFixed(3)}s`;
-    }
-
-    function renderRankings(rankings) {
-      const table = document.getElementById('rankings-table');
-      if (rankings.length === 0) return;
-
-      table.innerHTML = rankings.map(r => `
-        <tr class="rank-${r.rank}">
-          <td>#${r.rank}</td>
-          <td><strong>${escapeHTML(r.displayName)}</strong></td>
-          <td>${escapeHTML(r.teamName)}</td>
-          <td>+${(r.reactionTimeMs / 1000).toFixed(3)}s</td>
-          <td>${r.behindWinnerMs === 0 ? '—' : '+' + r.behindWinnerMs.toFixed(1) + 'ms'}</td>
-        </tr>
-      `).join('');
-    }
-
-    function renderFouls(fouls) {
-      const table = document.getElementById('fouls-table');
-      if (fouls.length === 0) return;
-
-      table.innerHTML = fouls.map(f => `
-        <tr class="foul-row">
-          <td><strong>${escapeHTML(f.displayName)}</strong></td>
-          <td>${escapeHTML(f.teamName)}</td>
-          <td>-${(f.earlyMs / 1000).toFixed(3)}s</td>
-          <td>🚨 Jumped Light</td>
-        </tr>
-      `).join('');
-    }
-
-    init();
+    connect();
   </script>
 </body>
 </html>

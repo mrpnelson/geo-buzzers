@@ -4,6 +4,7 @@ const fs = require('fs');
 const express = require('express');
 const WebSocket = require('ws');
 const parseArgs = require('minimist');
+const crypto = require('crypto');
 
 // ====================================================================
 // BRANDING CONFIGURATION
@@ -164,6 +165,10 @@ const args = parseArgs(process.argv.slice(2));
 const ADMIN_PIN = args.pin || process.env.ADMIN_PIN || null;
 
 const app = express();
+// Behind Cloud Run's load balancer, the socket address is the proxy. Without
+// this, every client looks like one IP and the throttle below would lock out
+// the whole venue on one person's typo.
+app.set('trust proxy', true);
 app.use(express.json());
 
 const server = http.createServer(app);
@@ -174,6 +179,11 @@ const GRACE_TOLERANCE_MS = 120;
 // How far the server's own receive time may sit outside the light sequence
 // before we stop believing a press really happened during the countdown.
 const ARRIVAL_TOLERANCE_MS = 1000;
+// No human reacts in more than a couple of minutes. Anything beyond this is
+// a broken client clock, not a slow player - most often a device that
+// calibrated its offset before NTP set its system clock, then had the clock
+// corrected underneath it, so the offset gets counted twice.
+const MAX_PLAUSIBLE_REACTION_MS = 120000;
 
 let gameState = {
   timerStarted: false,
@@ -204,10 +214,25 @@ app.get('/api/auth-status', (req, res) => {
 
 // Verify PIN REST endpoint
 app.post('/api/verify-pin', (req, res) => {
-  const { pin } = req.body;
-  if (!ADMIN_PIN || String(pin) === String(ADMIN_PIN)) {
+  const key = req.ip || 'unknown';
+
+  const wait = pinLockoutRemaining(key);
+  if (wait > 0) {
+    res.set('Retry-After', String(wait));
+    return res.status(429).json({
+      success: false,
+      error: `Too many attempts. Try again in ${wait}s.`,
+      retryAfter: wait
+    });
+  }
+
+  const { pin } = req.body || {};
+  if (pinMatches(pin)) {
+    clearPinFailures(key);
     return res.json({ success: true });
   }
+
+  recordPinFailure(key);
   return res.status(401).json({ success: false, error: 'Invalid PIN' });
 });
 
@@ -423,15 +448,89 @@ app.get('/api/config', (req, res) => res.json(CONFIG));
 app.use(express.static(path.join(__dirname, 'public'), { index: false }));
 
 // Helper to check PIN authorization on incoming WS admin messages
-function isAuthorized(providedPin) {
+// Plain === leaks length and returns early on the first wrong character.
+// The practical risk to a 4-digit PIN is brute force rather than timing,
+// but a constant-time compare costs nothing.
+function pinMatches(providedPin) {
   if (!ADMIN_PIN) return true;
-  return String(providedPin) === String(ADMIN_PIN);
+  const a = Buffer.from(String(providedPin === undefined ? '' : providedPin));
+  const b = Buffer.from(String(ADMIN_PIN));
+  if (a.length !== b.length) return false;
+  return crypto.timingSafeEqual(a, b);
+}
+
+function isAuthorized(providedPin) {
+  return pinMatches(providedPin);
+}
+
+// ====================================================================
+// PIN BRUTE-FORCE THROTTLE
+// A 4-digit PIN is 10,000 possibilities. Unthrottled, the whole keyspace
+// falls in seconds, which makes the PIN decorative. Failures are counted
+// per client and lock that client out for a cooling-off period.
+// ====================================================================
+const PIN_MAX_ATTEMPTS = 5;
+const PIN_WINDOW_MS = 10 * 60 * 1000;
+// Progressive backoff: a host who mistypes recovers in half a minute, while
+// anyone working through the keyspace is pushed out to a quarter hour. At
+// five tries per 30s the 10,000 combinations take days, which is ample for
+// something guarding a quiz round.
+const PIN_LOCKOUT_BASE_MS = 30 * 1000;
+const PIN_LOCKOUT_MAX_MS = 15 * 60 * 1000;
+const pinAttempts = new Map(); // key -> { count, firstAt, lockedUntil, strikes }
+
+function prunePinAttempts(now) {
+  for (const [key, rec] of pinAttempts.entries()) {
+    const expired = (rec.lockedUntil || 0) < now && (now - rec.firstAt) > PIN_WINDOW_MS;
+    if (expired) pinAttempts.delete(key);
+  }
+}
+
+// Returns 0 if allowed, else the seconds remaining on the lockout.
+function pinLockoutRemaining(key) {
+  const now = Date.now();
+  prunePinAttempts(now);
+  const rec = pinAttempts.get(key);
+  if (!rec || !rec.lockedUntil) return 0;
+  if (rec.lockedUntil > now) return Math.ceil((rec.lockedUntil - now) / 1000);
+  rec.lockedUntil = 0;
+  pinAttempts.set(key, rec);
+  return 0;
+}
+
+function recordPinFailure(key) {
+  const now = Date.now();
+  const rec = pinAttempts.get(key) || { count: 0, firstAt: now, lockedUntil: 0, strikes: 0 };
+  if (now - rec.firstAt > PIN_WINDOW_MS) {
+    rec.count = 0;
+    rec.firstAt = now;
+    rec.strikes = 0;
+  }
+  rec.count++;
+  if (rec.count >= PIN_MAX_ATTEMPTS) {
+    rec.strikes++;
+    const lockMs = Math.min(
+      PIN_LOCKOUT_BASE_MS * Math.pow(2, rec.strikes - 1),
+      PIN_LOCKOUT_MAX_MS
+    );
+    rec.lockedUntil = now + lockMs;
+    rec.count = 0;
+    rec.firstAt = now;
+    console.warn(`[AUTH] ${PIN_MAX_ATTEMPTS} failed PIN attempts from ${key} - locked out for ${lockMs / 1000}s (strike ${rec.strikes})`);
+  }
+  pinAttempts.set(key, rec);
+}
+
+function clearPinFailures(key) {
+  pinAttempts.delete(key);
 }
 
 console.log(`\n==================================================`);
 console.log(`Buzzer Server running on port ${PORT}`);
 if (ADMIN_PIN) {
-  console.log(`[AUTH] Host actions locked behind PIN: ${ADMIN_PIN}`);
+  // Never log the value: Cloud Logging is readable by anyone with the
+  // Logs Viewer role on the project.
+  console.log(`[AUTH] Host actions locked behind a PIN (${String(ADMIN_PIN).length} characters)`);
 } else {
   console.log(`[AUTH] Running WITHOUT PIN protection (Pass --pin=XXXX to lock)`);
 }
@@ -485,7 +584,7 @@ wss.on('connection', (ws, req) => {
   });
 
   console.log(`[NET] New WebSocket client connected from ${clientIp}`);
-  broadcastDeviceList();
+  sendDeviceListTo(ws);
 
   ws.on('message', (rawMessage) => {
     try {
@@ -511,12 +610,22 @@ function handleMessage(ws, data) {
   const adminTypes = ['START_TIMER', 'LED_TEST', 'RESET_ROUND', 'TOGGLE_VIRTUAL', 'TOGGLE_BCP']; // Added TOGGLE_VIRTUAL & TOGGLE_BCP
   if (adminTypes.includes(data.type)) {
     if (!isAuthorized(data.pin)) {
-      console.warn(`[AUTH] Unauthorized attempt for action '${data.type}'`);
+      ws.pinFailures = (ws.pinFailures || 0) + 1;
+      console.warn(`[AUTH] Unauthorized attempt for action '${data.type}' (failure ${ws.pinFailures})`);
+
       if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'AUTH_ERROR', message: 'Unauthorized: Invalid PIN' }));
       }
+
+      // Guessing over the socket is as cheap as guessing over HTTP unless
+      // we hang up. A legitimate console sends one wrong PIN at most.
+      if (ws.pinFailures >= PIN_MAX_ATTEMPTS) {
+        console.warn(`[AUTH] Closing socket after ${ws.pinFailures} failed PIN attempts`);
+        if (ws.readyState === WebSocket.OPEN) ws.close();
+      }
       return;
     }
+    ws.pinFailures = 0;
   }
 
   switch (data.type) {
@@ -538,13 +647,23 @@ function handleMessage(ws, data) {
         }
 
         const isNew = !gameState.connectedDevices.has(cleanId);
+        const previous = gameState.connectedDevices.get(cleanId);
         ws.hardwareId = cleanId;
+
+        // A client may report the offset it has calibrated to. Until it
+        // does, carry forward whatever we already knew rather than
+        // resetting to 0 on every sync sample - the roster previously read
+        // 0 for a calibrated buzzer until its first BUZZ arrived.
+        let knownOffset = previous ? previous.clockOffset : 0;
+        if (Number.isFinite(data.clockOffset)) knownOffset = Number(data.clockOffset);
 
         gameState.connectedDevices.set(cleanId, {
           socket: ws,
           hardwareId: cleanId,
-          clockOffset: 0,
-          videoDelayMs: typeof data.videoDelayMs === 'number' ? data.videoDelayMs : 0
+          clockOffset: knownOffset,
+          videoDelayMs: typeof data.videoDelayMs === 'number'
+            ? data.videoDelayMs
+            : (previous ? previous.videoDelayMs : 0)
         });
         
         if (!gameState.deviceMappings.has(cleanId)) {
@@ -740,6 +859,28 @@ function handleMessage(ws, data) {
 
       let reactionTimeMs = trueBuzzServerTime - gameState.timerStartTime;
 
+      // Sanity-check before this reaches a scoreboard. The arrival time is
+      // the server's own clock and cannot be influenced by the device, so a
+      // buzz that arrived on time but claims an implausible reaction is
+      // definitionally a clock problem.
+      const arrivalReactionMs = serverArrivalTime - gameState.timerStartTime;
+      if (Math.abs(reactionTimeMs) > MAX_PLAUSIBLE_REACTION_MS &&
+          Math.abs(arrivalReactionMs) <= MAX_PLAUSIBLE_REACTION_MS) {
+        console.error(
+          `[CLOCK] Rejected buzz from ${hwId}: claimed reaction ${(reactionTimeMs / 1000).toFixed(1)}s ` +
+          `but it arrived ${(arrivalReactionMs / 1000).toFixed(3)}s after the green light. ` +
+          `Reported clockOffset ${clockOffset}ms is stale - device must re-calibrate.`
+        );
+        if (ws && ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({
+            type: 'CLOCK_ERROR',
+            message: 'Clock offset is stale. Re-calibrating.',
+            serverTime: serverArrivalTime
+          }));
+        }
+        return;
+      }
+
       if ((trueBuzzServerTime + GRACE_TOLERANCE_MS) < gameState.timerStartTime) {
         // A foul is only real if the press physically happened during the 3s
         // light sequence. trueBuzzServerTime is derived from the device's own
@@ -819,7 +960,7 @@ function sendPrematureNudge(ws, hwId, mapping, teamMeta) {
   });
 }
 
-function broadcastDeviceList() {
+function buildDeviceListPayload() {
   const devices = [];
 
   for (const [hwId, device] of gameState.connectedDevices.entries()) {
@@ -842,13 +983,27 @@ function broadcastDeviceList() {
     });
   }
 
-  broadcast({
+  return {
     type: 'DEVICE_LIST_UPDATE',
     devices: devices,
     teams: gameState.teams,
-    bcpEnabled: gameState.bcpEnabled, // NEW: Broadcast BCP State
-    virtualEnabled: gameState.virtualBuzzersEnabled // NEW: Append to outgoing websocket data
-  });
+    bcpEnabled: gameState.bcpEnabled,
+    virtualEnabled: gameState.virtualBuzzersEnabled
+  };
+}
+
+function broadcastDeviceList() {
+  broadcast(buildDeviceListPayload());
+}
+
+// Sent to one socket that has just connected. A fresh console needs the
+// roster immediately, but nobody else's state changed, so there is nothing
+// to tell them. Broadcasting here meant every connect - including each
+// attempt from a client stuck in a reconnect loop - fanned a full roster
+// out to every buzzer on the server.
+function sendDeviceListTo(ws) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  ws.send(JSON.stringify(buildDeviceListPayload()));
 }
 
 function broadcast(payload) {

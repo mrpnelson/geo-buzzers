@@ -7,6 +7,7 @@
 #include <Preferences.h>
 #include "esp_mac.h"
 #include "esp_timer.h"
+#include <driver/gpio.h>
 
 #include "config.h"
 
@@ -89,11 +90,47 @@ bool isLockedOut = false;
 unsigned long lockoutStartTime = 0;
 
 int64_t clockOffsetMs = 0;
+
+// The measured offset is only valid for the system clock that was in place
+// when it was measured. SNTP lands asynchronously and can step the clock
+// long after calibration - and steps it again on its periodic refresh - at
+// which point the offset is counted twice and reaction times come back as
+// an epoch. These record the clock/uptime relationship at calibration so a
+// step can be detected.
+int64_t calibEpochMs = 0;
+uint32_t calibMillis = 0;
+const int64_t CLOCK_STEP_TOLERANCE_MS = 3000;
 bool isCalibrated = false;
 bool wsConnected = false;
 
 unsigned long lastPeriodicSyncMs = 0;
 const unsigned long RESYNC_INTERVAL_MS = 60000;
+
+// Calibration is a chain of three samples, each queued by the previous
+// response. A single dropped packet used to break it permanently, leaving a
+// buzzer that looked healthy and silently ignored every press. This is the
+// watchdog that restarts a stalled burst.
+unsigned long lastCalibAttemptMs = 0;
+const unsigned long CALIB_RETRY_MS = 5000;
+
+// Only accept the sample we are actually waiting for, so a late reply from
+// an abandoned burst cannot be mixed into a newer one.
+int inFlightSampleIndex = 0;
+
+// A round ends on the buzzer 60s after the green light even if the host
+// never resets. While a sequence is "active" the clock-step detector and
+// periodic re-sync are both suppressed, so leaving it set indefinitely let
+// the offset age unchecked.
+const unsigned long ROUND_LINGER_MS = 60000;
+
+// Identifies the round a schedule belongs to, so a sync burst still in
+// flight cannot re-arm a buzzer that has already buzzed.
+int64_t appliedGreenTime = 0;
+
+// WiFi recovery escalation.
+unsigned long wifiDownSinceMs = 0;
+const unsigned long WIFI_RECONNECT_MS = 15000;
+const unsigned long WIFI_REBOOT_MS = 60000;
 
 // Deferred sync sends
 int pendingSyncIndex = 0;
@@ -114,7 +151,13 @@ const unsigned long HEARTBEAT_MS = 5000;
 struct SyncSample {
   double rtt;
   double offset;
+  bool valid;
 } samples[3];
+
+// A clock step mid-burst makes (t3 - t0) negative, and the old code picked
+// the LOWEST rtt - so the corrupt sample was actively preferred.
+const double MIN_PLAUSIBLE_RTT_MS = 0.0;
+const double MAX_PLAUSIBLE_RTT_MS = 2000.0;
 
 // ============================================================================
 // LED RENDERER
@@ -124,20 +167,66 @@ bool ledDirty = true;
 unsigned long lastLedWriteMs = 0;
 const char* ledReason = "boot";
 
+// Flash support. Error, countdown-3 and foul are all the same red, and a
+// solid colour cannot distinguish them - a player who jumped the light saw
+// no change at all. A flashing pattern separates the foul without needing a
+// new colour.
+bool ledFlashing = false;
+unsigned long ledFlashStartMs = 0;
+bool ledFlashPhaseOn = true;
+unsigned long ledFlashOnMs = 0;
+unsigned long ledFlashOffMs = 0;
+
 void setLed(uint8_t r, uint8_t g, uint8_t b, const char* reason) {
-  if (r == ledR && g == ledG && b == ledB) return;
+  if (r == ledR && g == ledG && b == ledB && !ledFlashing) {
+    // Same colour, but keep the reason current so the serial log and the
+    // heartbeat still say which state we are actually in.
+    ledReason = reason;
+    return;
+  }
   ledR = r; ledG = g; ledB = b;
+  ledFlashing = false;
   ledDirty = true;
   ledReason = reason;
   LOG_EVT("[LED] -> rgb(%u,%u,%u)  (%s)\n", r, g, b, reason);
 }
 
+void setLedFlash(uint8_t r, uint8_t g, uint8_t b,
+                 unsigned long onMs, unsigned long offMs, const char* reason) {
+  ledR = r; ledG = g; ledB = b;
+  ledFlashing = true;
+  ledFlashOnMs = onMs;
+  ledFlashOffMs = offMs;
+  ledFlashStartMs = millis();
+  ledFlashPhaseOn = true;
+  ledDirty = true;
+  ledReason = reason;
+  LOG_EVT("[LED] -> rgb(%u,%u,%u) flashing %lu/%lu ms  (%s)\n",
+          r, g, b, onMs, offMs, reason);
+}
+
 void renderLed() {
   unsigned long now = millis();
+
+  bool showColour = true;
+  if (ledFlashing) {
+    unsigned long period = ledFlashOnMs + ledFlashOffMs;
+    if (period == 0) period = 1;
+    showColour = ((now - ledFlashStartMs) % period) < ledFlashOnMs;
+    if (showColour != ledFlashPhaseOn) {
+      ledFlashPhaseOn = showColour;
+      ledDirty = true;
+    }
+  }
+
   if (!ledDirty && (now - lastLedWriteMs) < LED_REFRESH_MS) return;
 
+  uint8_t r = showColour ? ledR : 0;
+  uint8_t g = showColour ? ledG : 0;
+  uint8_t b = showColour ? ledB : 0;
+
   for (int i = 0; i < NUM_PIXELS; i++) {
-    pixels.setPixelColor(i, pixels.Color(ledR, ledG, ledB));
+    pixels.setPixelColor(i, pixels.Color(r, g, b));
   }
   pixels.show();
 
@@ -155,7 +244,10 @@ void renderLed() {
 #define LED_CD_ORANGE() setLed(255, 100, 0,   "countdown 1")
 #define LED_LIVE()      setLed(0, 255, 0,     "LIVE")
 #define LED_BUZZED()    setLed(58, 103, 173,  "buzzed")
-#define LED_FOUL()      setLed(255, 0, 0,     "early press")
+// ~4 Hz red strobe, distinct from solid error red and solid countdown red.
+const unsigned long FOUL_FLASH_ON_MS  = 120;
+const unsigned long FOUL_FLASH_OFF_MS = 120;
+#define LED_FOUL()      setLedFlash(255, 0, 0, FOUL_FLASH_ON_MS, FOUL_FLASH_OFF_MS, "early press (foul)")
 
 int ledTestStep = -1;
 unsigned long ledTestNextMs = 0;
@@ -210,10 +302,16 @@ String getPortalSsid() {
 // ============================================================================
 // INTERRUPT SERVICE ROUTINE
 // ============================================================================
+// gpio_get_level() is IRAM-resident; Arduino's digitalRead() is not, and
+// can panic if a press lands while flash is busy (an NVS write, say).
+static inline bool IRAM_ATTR buttonIsDownFromISR() {
+  return gpio_get_level((gpio_num_t)BUTTON_PIN) == 0;
+}
+
 void IRAM_ATTR handleButtonInterrupt() {
   unsigned long nowMs = millis();
   if (!isLockedOut && (nowMs - lastISRTime > 200)) {
-    if (digitalRead(BUTTON_PIN) == LOW) {
+    if (buttonIsDownFromISR()) {
       rawPressMicros = esp_timer_get_time();
       buttonPressed = true;
       isLockedOut = true;
@@ -239,6 +337,11 @@ void startSyncSample(int index, bool isBackground = false) {
   doc["playerId"] = playerId;
   doc["sampleIndex"] = index;
   doc["isPeriodic"] = isBackground;
+  doc["calibrated"] = isCalibrated;
+  if (isCalibrated) doc["clockOffset"] = clockOffsetMs;
+
+  inFlightSampleIndex = index;
+  if (index == 1 && !isBackground) lastCalibAttemptMs = millis();
 
   String output;
   serializeJson(doc, output);
@@ -256,6 +359,12 @@ void queueSyncSample(int index, unsigned long delayMs) {
 // SCHEDULE HANDLING
 // ============================================================================
 void applySchedule(int64_t serverGreenTime) {
+  // The server re-sends SCHEDULED_TIMER_START in reply to any SYNC_REQUEST
+  // while a round is pending, so samples still in flight can land mid-round.
+  // Re-applying the same round must refresh the timing without clearing the
+  // buzz state, or a player who has already buzzed gets re-armed.
+  bool sameRound = (appliedGreenTime != 0 && serverGreenTime == appliedGreenTime);
+
   int64_t nowEpoch = getEpochMillis64();
   int64_t msUntilGreen = serverGreenTime - (nowEpoch + clockOffsetMs);
 
@@ -269,13 +378,21 @@ void applySchedule(int64_t serverGreenTime) {
 
   greenLightMillis = millis() + (unsigned long)msUntilGreen;
   syncStartMillis  = greenLightMillis - 3000;
+  appliedGreenTime = serverGreenTime;
 
   lightSequenceActive = true;
+  ledTestStep = -1;
+
+  if (sameRound) {
+    LOG_EVT("[EVENT] SCHEDULED_TIMER_START re-applied for the same round - "
+            "timing refreshed, buzz state kept\n");
+    return;
+  }
+
   currentLightState = -1;
   hasBuzzedThisRound = false;
   buttonPressed = false;
   isLockedOut = (digitalRead(BUTTON_PIN) == LOW);
-  ledTestStep = -1;
 
   LOG_EVT("[EVENT] SCHEDULED_TIMER_START applied - light sequence ARMED\n");
 }
@@ -283,19 +400,34 @@ void applySchedule(int64_t serverGreenTime) {
 // ============================================================================
 // WEBSOCKET EVENT HANDLER
 // ============================================================================
+// Connection stability diagnostics. A WebSocket that dies at a fixed
+// interval points at an infrastructure timeout rather than the app; these
+// counters turn "it drops periodically" into a measured number.
+static uint32_t wsConnectedAtMs   = 0;
+static uint32_t wsDisconnectCount = 0;
+
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
   switch (type) {
-    case WStype_DISCONNECTED:
-      LOG_EVT("[WS] Disconnected from server.\n");
+    case WStype_DISCONNECTED: {
+      wsDisconnectCount++;
+      uint32_t heldSec = wsConnectedAtMs ? (millis() - wsConnectedAtMs) / 1000 : 0;
+      LOG_EVT("[WS] Disconnected. Held %lus, drop #%lu, RSSI %d dBm, heap %u\n",
+              (unsigned long)heldSec, (unsigned long)wsDisconnectCount,
+              WiFi.RSSI(), (unsigned)ESP.getFreeHeap());
+      wsConnectedAtMs = 0;
       wsConnected = false;
       isCalibrated = false;
       lightSequenceActive = false;
       pendingSyncIndex = 0;
       LED_ERROR();
       break;
+    }
 
     case WStype_CONNECTED:
-      LOG_EVT("[WS] Connected over SSL! Queuing clock sync...\n");
+      wsConnectedAtMs = millis();
+      LOG_EVT("[WS] Connected over SSL! WiFi %s, RSSI %d dBm, heap %u\n",
+              WiFi.status() == WL_CONNECTED ? "up" : "DOWN",
+              WiFi.RSSI(), (unsigned)ESP.getFreeHeap());
       wsConnected = true;
       if (!lightSequenceActive) LED_STANDBY();
       queueSyncSample(1, 100);
@@ -326,27 +458,57 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 
         double rtt = (double)((t3 - t0) - (t2 - t1));
         double offset = (double)(((t1 - t0) + (t2 - t3)) / 2.0);
+        bool rttPlausible = (rtt >= MIN_PLAUSIBLE_RTT_MS && rtt <= MAX_PLAUSIBLE_RTT_MS);
+
+        if (!isPeriodic && sampleIndex != inFlightSampleIndex) {
+          LOG_VRB("[SYNC] Ignoring stale sample %d (waiting for %d)\n",
+                  sampleIndex, inFlightSampleIndex);
+          return;
+        }
 
         if (isPeriodic) {
+          if (!rttPlausible) {
+            LOG_VRB("[SYNC] Discarding periodic sample, RTT %.1f ms implausible\n", rtt);
+            return;
+          }
           const double ALPHA = 0.25;
           clockOffsetMs = (int64_t)((ALPHA * offset) + ((1.0 - ALPHA) * (double)clockOffsetMs));
+          calibEpochMs = getEpochMillis64();
+          calibMillis = millis();
         } else {
           if (sampleIndex < 1 || sampleIndex > 3) return;
-          samples[sampleIndex - 1] = { rtt, offset };
+          samples[sampleIndex - 1] = { rtt, offset, rttPlausible };
+          if (!rttPlausible) {
+            LOG_VRB("[SYNC] Sample %d rejected, RTT %.1f ms implausible\n", sampleIndex, rtt);
+          }
 
           if (sampleIndex < 3) {
             queueSyncSample(sampleIndex + 1, 50);
           } else {
-            int bestIdx = 0;
-            for (int i = 1; i < 3; i++) {
-              if (samples[i].rtt < samples[bestIdx].rtt) bestIdx = i;
+            int bestIdx = -1;
+            for (int i = 0; i < 3; i++) {
+              if (!samples[i].valid) continue;
+              if (bestIdx < 0 || samples[i].rtt < samples[bestIdx].rtt) bestIdx = i;
             }
+
+            if (bestIdx < 0) {
+              LOG_ERR("[SYNC] All three samples were implausible - restarting burst.\n");
+              lastCalibAttemptMs = 0;   // let the watchdog retry immediately
+              return;
+            }
+
             clockOffsetMs = (int64_t)samples[bestIdx].offset;
             isCalibrated = true;
             lastPeriodicSyncMs = millis();
+            calibEpochMs = getEpochMillis64();
+            calibMillis = millis();
 
             LOG_EVT("[SYNC] Calibration complete. Offset: %lld ms (best RTT %.2f ms)\n",
                           clockOffsetMs, samples[bestIdx].rtt);
+            if (llabs(clockOffsetMs) > 60000LL) {
+              LOG_ERR("[SYNC] Offset is implausibly large - local clock is unset. "
+                      "Waiting for NTP to land, then re-calibrating.\n");
+            }
 
             if (!lightSequenceActive && !hasBuzzedThisRound) LED_STANDBY();
           }
@@ -355,6 +517,14 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 
       else if (strcmp(msgType, "SCHEDULED_TIMER_START") == 0) {
         applySchedule(doc["greenTargetTime"].as<int64_t>());
+      }
+
+      else if (strcmp(msgType, "CLOCK_ERROR") == 0) {
+        LOG_ERR("[CLOCK] Server rejected our timestamp as implausible. Re-calibrating.\n");
+        isCalibrated = false;
+        clockOffsetMs = 0;
+        pendingSyncIndex = 0;
+        queueSyncSample(1, 50);
       }
 
       else if (strcmp(msgType, "PREMATURE_RESET") == 0) {
@@ -371,7 +541,8 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
       else if (strcmp(msgType, "ROUND_RESET") == 0) {
         LOG_EVT("[EVENT] ROUND_RESET\n");
         lightSequenceActive = false;
-        currentLightState = 0;
+        currentLightState = -1;
+        appliedGreenTime = 0;
         hasBuzzedThisRound = false;
         buttonPressed = false;
         isLockedOut = (digitalRead(BUTTON_PIN) == LOW);
@@ -524,10 +695,66 @@ void loop() {
   serviceSerialConsole();
 
   if (WiFi.status() != WL_CONNECTED) {
+    if (wifiDownSinceMs == 0) {
+      wifiDownSinceMs = millis();
+      LOG_ERR("[NET] WiFi lost - waiting for auto-reconnect.\n");
+    }
+    unsigned long downFor = millis() - wifiDownSinceMs;
+
+    // Escalate rather than sitting on red forever.
+    if (downFor > WIFI_REBOOT_MS) {
+      LOG_ERR("[NET] WiFi down %lus - restarting.\n", downFor / 1000);
+      delay(100);
+      ESP.restart();
+    } else if (downFor > WIFI_RECONNECT_MS && (downFor % 5000) < 220) {
+      LOG_ERR("[NET] WiFi down %lus - forcing reconnect.\n", downFor / 1000);
+      WiFi.reconnect();
+    }
+
     LED_ERROR();
     renderLed();
     delay(200);
     return;
+  }
+  if (wifiDownSinceMs != 0) {
+    LOG_EVT("[NET] WiFi recovered after %lus\n", (millis() - wifiDownSinceMs) / 1000);
+    wifiDownSinceMs = 0;
+  }
+
+  // End the round on the buzzer even if the host never resets, so the
+  // clock-step detector and periodic re-sync below come back into play.
+  if (lightSequenceActive && (long)(millis() - greenLightMillis) > (long)ROUND_LINGER_MS) {
+    LOG_EVT("[EVENT] Round linger expired %lus after green - sequence ended\n",
+            ROUND_LINGER_MS / 1000);
+    lightSequenceActive = false;
+    currentLightState = -1;
+    if (!hasBuzzedThisRound && wsConnected) LED_STANDBY();
+  }
+
+  // Restart a calibration burst that stalled on a dropped response. Without
+  // this, one lost packet left the buzzer permanently uncalibrated.
+  if (wsConnected && !isCalibrated && pendingSyncIndex == 0 &&
+      (millis() - lastCalibAttemptMs) > CALIB_RETRY_MS) {
+    LOG_ERR("[SYNC] Calibration stalled - restarting burst.\n");
+    queueSyncSample(1, 0);
+    lastCalibAttemptMs = millis();
+  }
+
+  // If the system clock has stepped since calibration, every timestamp we
+  // derive from it is wrong by the size of the step. Throw the offset away
+  // and re-measure rather than reporting a nonsense reaction time.
+  if (isCalibrated && !lightSequenceActive) {
+    int64_t expectedEpoch = calibEpochMs + (int64_t)(millis() - calibMillis);
+    int64_t drift = getEpochMillis64() - expectedEpoch;
+    if (llabs(drift) > CLOCK_STEP_TOLERANCE_MS) {
+      LOG_ERR("[CLOCK] System clock stepped %lld ms (NTP landed or refreshed). "
+              "Discarding stale offset %lld ms and re-calibrating.\n",
+              drift, clockOffsetMs);
+      isCalibrated = false;
+      clockOffsetMs = 0;
+      pendingSyncIndex = 0;
+      queueSyncSample(1, 50);
+    }
   }
 
   if (pendingSyncIndex > 0 && (long)(millis() - pendingSyncAtMs) >= 0) {
@@ -566,7 +793,13 @@ void loop() {
     buttonPressed = false;
 
     if (digitalRead(BUTTON_PIN) == LOW || isLockedOut) {
-      if (isCalibrated && !hasBuzzedThisRound) {
+      // Not gated on isCalibrated any more. A press must never be silently
+      // swallowed; the server validates the timestamp and rejects it if the
+      // offset is stale, which is better feedback than nothing happening.
+      if (!hasBuzzedThisRound) {
+        if (!isCalibrated) {
+          LOG_ERR("[BUZZ] Sending while uncalibrated - server will arbitrate.\n");
+        }
 
         uint64_t conversionUptimeMicros = esp_timer_get_time();
         int64_t conversionEpochMs = getEpochMillis64();
@@ -589,7 +822,7 @@ void loop() {
         doc["playerId"] = playerId;
         doc["clientPressTime"] = pressTimeMs;
         doc["clockOffset"] = clockOffsetMs;
-        doc["rawPressTime"] = (double)(conversionUptimeMicros) / 1000.0;
+        doc["calibrated"] = isCalibrated;
 
         String output;
         serializeJson(doc, output);
@@ -615,10 +848,14 @@ void loop() {
 
   if (debugLevel >= 2 && millis() - lastHeartbeatMs > HEARTBEAT_MS) {
     lastHeartbeatMs = millis();
-    LOG_VRB("[HB] ws=%d cal=%d seq=%d state=%d buzzed=%d led=rgb(%u,%u,%u) msToGreen=%ld\n",
+    LOG_VRB("[HB] ws=%d cal=%d seq=%d state=%d buzzed=%d led=rgb(%u,%u,%u) msToGreen=%ld"
+                  " up=%lus drops=%lu rssi=%d heap=%u\n",
                   wsConnected ? 1 : 0, isCalibrated ? 1 : 0, lightSequenceActive ? 1 : 0,
                   currentLightState, hasBuzzedThisRound ? 1 : 0,
                   ledR, ledG, ledB,
-                  lightSequenceActive ? (long)(int32_t)(greenLightMillis - millis()) : 0L);
+                  lightSequenceActive ? (long)(int32_t)(greenLightMillis - millis()) : 0L,
+                  (unsigned long)(wsConnectedAtMs ? (millis() - wsConnectedAtMs) / 1000 : 0),
+                  (unsigned long)wsDisconnectCount,
+                  WiFi.RSSI(), (unsigned)ESP.getFreeHeap());
   }
 }
