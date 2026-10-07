@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>TV Display</title>
+  <title>Monitor</title>
   <style>
     :root {
       --bg-dark: #121416;
@@ -285,6 +285,34 @@
     @keyframes rowIn { from { opacity: 0; transform: translateY(1.5vh); } to { opacity: 1; transform: none; } }
     @keyframes pulseGlow { 0% { transform: scale(0.98); opacity: 0.85; } 100% { transform: scale(1.03); opacity: 1; } }
 
+    /* ---------- Remote viewers -----------------------------------------
+       The vh-based scale means a phone at arm's length reads the same as a
+       TV across a room, which is the point. Two things still need help on a
+       narrow screen: the header row runs out of width, and the countdown
+       digit is sized against height while "GO" is two characters wide. */
+    @media (max-width: 760px) {
+      header { flex-wrap: wrap; gap: 1vh 2vw; }
+      .header-left { flex: 1 1 100%; }
+      .header-right { flex: 1 1 100%; justify-content: space-between; }
+      .timer-display { min-width: 0; flex: 1 1 auto; font-size: 2.8vh; }
+      h1 { font-size: 2.8vh; }
+      .status-badge { font-size: 2vh; }
+      .roster-title { font-size: 2vh; }
+      .buzzer-badge { font-size: 2vh; }
+    }
+
+    /* Portrait: height is plentiful, width is not. */
+    @media (max-aspect-ratio: 3/4) {
+      .cd-number { font-size: 20vh; gap: 3vw; }
+      .cd-mascot { font-size: 9vh; }
+      .cd-phase { font-size: 3.4vh; }
+      #stage-empty { font-size: 3.4vh; }
+      .fouls-label { font-size: 2.4vh; }
+      .fouls-list { font-size: 4vh; }
+      #toast .t-name { font-size: 6vh; }
+      .clue-text { font-size: 5vh; }
+    }
+
     @media (prefers-reduced-motion: reduce) {
       .result-row, #toast { animation: none; }
       .stage-red, .stage-purple, .stage-orange { animation: none; }
@@ -346,7 +374,7 @@
     // disk or served by something that doesn't inject it.
     // ------------------------------------------------------------------
     const BRAND_FALLBACK = { mascot: '🔔', accentColor: '#ff6900', storagePrefix: 'buzzer' };
-    const PAGE_FALLBACK = { title: 'TV Display', heading: 'Buzzer System' };
+    const PAGE_FALLBACK = { title: 'Monitor', heading: 'Buzzer System' };
 
     const CONFIG = {
       brand: Object.assign({}, BRAND_FALLBACK, (window.APP_CONFIG || {}).brand),

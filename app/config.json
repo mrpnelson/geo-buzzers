@@ -1,10 +1,10 @@
 {
   "brand": {
-    "organizationName": "ACME",
+    "organizationName": "Rule4",
     "productName": "Jeopardy!",
     "mascot": "🦊",
     "accentColor": "#ff6900",
-    "storagePrefix": "acme"
+    "storagePrefix": "rule4"
   },
   "portal": {
     "title": "{app} Portal",
@@ -21,8 +21,8 @@
       "title": "{app} Mobile Host Console",
       "heading": "Host Mobile"
     },
-    "tv": {
-      "title": "{app} TV Display",
+    "monitor": {
+      "title": "{app} Monitor",
       "heading": "{app}"
     },
     "virtual": {

@@ -128,6 +128,12 @@
     .buzzer-item-header { display: flex; justify-content: space-between; align-items: center; }
     .buzzer-title { font-size: 0.85rem; font-weight: 800; color: var(--accent-orange); word-break: break-all; display: flex; align-items: center; gap: 6px; }
 
+    .uncal-tag {
+      font-size: 0.65rem; font-weight: 800; color: #fde047;
+      background: rgba(250, 204, 21, 0.18); border: 1px solid #facc15;
+      padding: 1px 5px; border-radius: 4px; text-transform: uppercase;
+      letter-spacing: 0.03em; white-space: nowrap;
+    }
     .press-dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background-color: var(--accent-orange); opacity: 0; transition: opacity 0.15s ease; box-shadow: 0 0 8px var(--accent-orange); }
     .press-dot.active { opacity: 1; }
 
@@ -656,7 +662,12 @@
         const currentTeam = dev.teamId || 'unassigned';
 
         const isWebBuzzer = hwId.startsWith('Virtual_') || hwId.startsWith('Mobile_');
-        const titleLabel = isWebBuzzer ? `${escapeHTML(hwId)} [Web Buzzer]` : escapeHTML(hwId);
+        // An explicit false means the device told us its clock is not
+        // calibrated; null means it never reported either way.
+        const uncalTag = dev.calibrated === false
+          ? ` <span class="uncal-tag" title="Clock offset not calibrated - reaction times unreliable">no clock</span>`
+          : '';
+        const titleLabel = (isWebBuzzer ? `${escapeHTML(hwId)} [Web Buzzer]` : escapeHTML(hwId)) + uncalTag;
 
         let teamOptionsHtml = '';
         if (isWebBuzzer && !virtualBuzzersEnabled) {

@@ -38,7 +38,7 @@ const DEFAULT_CONFIG = {
   pages: {
     host:    { title: '{app} Host Console',        heading: '{app} Host Console' },
     mobile:  { title: '{app} Mobile Host Console', heading: 'Host Mobile' },
-    tv:      { title: '{app} TV Display',          heading: '{app}' },
+    monitor: { title: '{app} Monitor',             heading: '{app}' },
     virtual: { title: '{org} Virtual Buzzer',      heading: 'Virtual Buzzer' }
   }
 };
@@ -105,6 +105,14 @@ function loadConfig() {
     }
   }
 
+  // The TV page became the Monitor page. A config written against the old
+  // key would otherwise stop applying silently and fall back to generic
+  // defaults, so accept it and say so.
+  if (fileConfig.pages && fileConfig.pages.tv && !fileConfig.pages.monitor) {
+    fileConfig.pages.monitor = fileConfig.pages.tv;
+    console.warn('[CONFIG] "pages.tv" is deprecated - rename it to "pages.monitor". Using it for now.');
+  }
+
   return resolveTokens(deepMerge(DEFAULT_CONFIG, fileConfig));
 }
 
@@ -129,7 +137,7 @@ function toInlineJson(value) {
 // just before </head>. That runs before each page's own script, which
 // matters for virtual.html: it reads its localStorage keys at top level and
 // those keys are derived from the configured storage prefix.
-const PAGE_FILES = { host: 'main.html', mobile: 'mobile.html', tv: 'tv.html', virtual: 'virtual.html' };
+const PAGE_FILES = { host: 'main.html', mobile: 'mobile.html', monitor: 'monitor.html', virtual: 'virtual.html' };
 const pageCache = new Map();
 
 function renderPage(pageKey) {
@@ -175,7 +183,7 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 const PORT = process.env.PORT || 8080;
-const GRACE_TOLERANCE_MS = 120;
+const GRACE_TOLERANCE_MS = 0;
 // How far the server's own receive time may sit outside the light sequence
 // before we stop believing a press really happened during the countdown.
 const ARRIVAL_TOLERANCE_MS = 1000;
@@ -184,6 +192,234 @@ const ARRIVAL_TOLERANCE_MS = 1000;
 // calibrated its offset before NTP set its system clock, then had the clock
 // corrected underneath it, so the offset gets counted twice.
 const MAX_PLAUSIBLE_REACTION_MS = 120000;
+
+
+// ====================================================================
+// SLACK NOTIFIER (optional)
+//
+// Two one-way incoming webhooks: a live feed of round results, and an ops
+// feed of admin, security and device events. Both stay dormant unless the
+// matching environment variable is set, so this is safe to ship disabled.
+//
+// Rule for everything below: never touch the buzz path. Calls queue a line
+// and return immediately, a timer flushes batches, and every failure is
+// swallowed. Slack being down must never affect a game.
+// ====================================================================
+const SLACK = {
+  live: process.env.SLACK_WEBHOOK_LIVE || null,
+  ops:  process.env.SLACK_WEBHOOK_OPS  || null
+};
+// Slack allows about one message per second per webhook, with short bursts,
+// and answers a 429 with Retry-After. The two feeds are separate webhooks
+// aimed at separate channels, so each has its own budget - which is why the
+// live feed can be snappy while ops stays lazy and batched.
+const SLACK_CFG = {
+  live: { flushMs: 700,  minGapMs: 1000 },   // game action: post promptly
+  ops:  { flushMs: 5000, minGapMs: 1000 }    // audit trail: batch heavily
+};
+const SLACK_MAX_LINES = 40;     // lines per posted message
+const SLACK_MAX_QUEUE = 200;    // hard cap; oldest are dropped and counted
+const SLACK_TIMEOUT_MS = 4000;
+const SLACK_MAX_BACKOFF_MS = 60000;
+
+// A device that reconnects in a loop would otherwise post one line per
+// attempt. Past the threshold we say so once and go quiet.
+const CHURN_WINDOW_MS = 60000;
+const CHURN_THRESHOLD = 3;
+
+const slackQueues = { live: [], ops: [] };
+// Premature presses are counted per device per round. Someone leaning on a
+// button could otherwise post several lines a second.
+const slackPrematureCount = new Map();
+const slackDropped = { live: 0, ops: 0 };
+const slackChurn = new Map();
+const slackState = {
+  live: { lastPostAt: 0, pausedUntil: 0, timer: null, nextAt: 0, sending: false },
+  ops:  { lastPostAt: 0, pausedUntil: 0, timer: null, nextAt: 0, sending: false }
+};
+
+function slackPost(channel, line, urgent) {
+  if (!SLACK[channel] || !line) return;
+  const q = slackQueues[channel];
+  if (q.length >= SLACK_MAX_QUEUE) { slackDropped[channel]++; return; }
+  q.push(line);
+  slackSchedule(channel, urgent ? 0 : SLACK_CFG[channel].flushMs);
+}
+
+// Schedules the next flush, never sooner than one second after the last
+// post and never while Slack has told us to back off. Pulls an existing
+// timer earlier if something urgent arrives.
+function slackSchedule(channel, delayMs) {
+  if (!SLACK[channel]) return;
+  const st = slackState[channel];
+  const cfg = SLACK_CFG[channel];
+  const now = Date.now();
+
+  const earliest = Math.max(now + delayMs, st.lastPostAt + cfg.minGapMs, st.pausedUntil);
+  if (st.timer && st.nextAt <= earliest) return;    // already due sooner
+  if (st.timer) clearTimeout(st.timer);
+
+  st.nextAt = earliest;
+  st.timer = setTimeout(() => {
+    st.timer = null;
+    slackFlush(channel);
+  }, Math.max(0, earliest - now));
+  if (st.timer.unref) st.timer.unref();
+}
+
+async function slackFlush(channel) {
+  const url = SLACK[channel];
+  if (!url) return;
+  const st = slackState[channel];
+  if (st.sending) return;                       // one request in flight at a time
+  const q = slackQueues[channel];
+  if (q.length === 0) return;
+  if (Date.now() < st.pausedUntil) { slackSchedule(channel, 0); return; }
+
+  const lines = q.splice(0, SLACK_MAX_LINES);
+  if (slackDropped[channel] > 0) {
+    lines.push(`_${slackDropped[channel]} further message(s) dropped - queue full_`);
+    slackDropped[channel] = 0;
+  }
+
+  st.sending = true;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SLACK_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: lines.join('\n') }),
+      signal: controller.signal
+    });
+
+    if (res.status === 429) {
+      // Rate limited. Put the batch back and wait however long Slack says.
+      const raw = parseInt(res.headers.get('retry-after') || '1', 10);
+      const waitMs = Math.min(Math.max(Number.isFinite(raw) ? raw : 1, 1) * 1000, SLACK_MAX_BACKOFF_MS);
+      st.pausedUntil = Date.now() + waitMs;
+      q.unshift(...lines);
+      console.warn(`[SLACK] ${channel} rate limited - retrying in ${waitMs / 1000}s`);
+    } else if (!res.ok) {
+      console.warn(`[SLACK] ${channel} webhook returned ${res.status}`);
+    }
+  } catch (err) {
+    console.warn(`[SLACK] ${channel} post failed: ${err.message}`);
+  } finally {
+    clearTimeout(timer);
+    st.sending = false;
+    st.lastPostAt = Date.now();
+    if (slackQueues[channel].length > 0) slackSchedule(channel, 0);
+  }
+}
+
+// Device events, coalesced per device so one flaky buzzer cannot flood the
+// channel. The suppression notice is itself the useful signal.
+function slackDevice(hwId, line) {
+  if (!SLACK.ops) return;
+  const now = Date.now();
+  const rec = slackChurn.get(hwId) || { count: 0, firstAt: now, suppressed: 0 };
+
+  if (now - rec.firstAt > CHURN_WINDOW_MS) {
+    if (rec.suppressed > 0) {
+      slackPost('ops', `:repeat: \`${hwId}\` settled - ${rec.suppressed} further event(s) were suppressed`);
+    }
+    rec.count = 0; rec.firstAt = now; rec.suppressed = 0;
+  }
+
+  rec.count++;
+  if (rec.count <= CHURN_THRESHOLD) {
+    slackPost('ops', line);
+  } else {
+    rec.suppressed++;
+    if (rec.suppressed === 1) {
+      slackPost('ops', `:repeat: \`${hwId}\` is reconnecting repeatedly - muting its events for 60s`);
+    }
+  }
+  slackChurn.set(hwId, rec);
+}
+
+// Reports only what actually changed, so saving an unedited form stays
+// silent. Roster and team changes are part of the game, so they go to the
+// live feed; the ops feed keeps the same detail as a moderator audit trail.
+function reportMappingChanges(beforeTeams, beforeMaps, isModeratorEdit) {
+  if (!SLACK.live && !SLACK.ops) return;
+
+  const teamName = (id) => (gameState.teams[id] && gameState.teams[id].teamName) || `Team ${id}`;
+  const label = (id) => {
+    if (id === 'unassigned') return 'unassigned';
+    if (id === 'ignore') return 'disabled';
+    return teamName(id);
+  };
+
+  const lines = [];
+
+  for (const [tId, was] of Object.entries(beforeTeams)) {
+    const now = gameState.teams[tId] && gameState.teams[tId].teamName;
+    if (now && now !== was) lines.push(`:busts_in_silhouette: Team ${tId} renamed *${was}* → *${now}*`);
+  }
+
+  for (const [hwId, m] of gameState.deviceMappings.entries()) {
+    const was = beforeMaps.get(hwId);
+    if (!was) {
+      lines.push(`:heavy_plus_sign: *${m.displayName}* added — ${label(m.teamId)}`);
+      continue;
+    }
+    if (was.displayName !== m.displayName) {
+      lines.push(`:pencil2: *${was.displayName}* renamed to *${m.displayName}*`);
+    }
+    if (was.teamId !== m.teamId) {
+      lines.push(`:dart: *${m.displayName}* — ${label(was.teamId)} → *${label(m.teamId)}*`);
+    }
+  }
+
+  if (lines.length === 0) return;
+
+  slackPost('live', lines.join('\n'));
+  slackPost('ops', (isModeratorEdit
+    ? ':memo: *Moderator updated the roster*'
+    : ':memo: Buzzer self-registered a name') + '\n' + lines.join('\n'));
+}
+
+function slackRoundSummary() {
+  if (!SLACK.live) return;
+  const buzzes = gameState.buzzes || [];
+  const fouls = gameState.fouls || [];
+
+  const early = [];
+  for (const [hwId, count] of slackPrematureCount.entries()) {
+    const m = gameState.deviceMappings.get(hwId);
+    early.push(`${m ? m.displayName : hwId}${count > 1 ? ` ×${count}` : ''}`);
+  }
+  slackPrematureCount.clear();
+
+  if (buzzes.length === 0 && fouls.length === 0) {
+    slackPost('live', ':no_bell: Round closed with no buzzes.'
+      + (early.length ? `\n   :raised_hand: Early presses: ${early.join(', ')}` : ''));
+    return;
+  }
+
+  const lines = [`:bell: *Round results*`];
+  const winner = buzzes.length ? buzzes[0].trueBuzzServerTime : 0;
+  buzzes.forEach((b, i) => {
+    const behind = i === 0 ? 'fastest' : `+${(b.trueBuzzServerTime - winner).toFixed(0)}ms`;
+    lines.push(`   ${i + 1}. *${b.displayName}* (${b.teamName}) — ${(b.reactionTimeMs / 1000).toFixed(3)}s _${behind}_`);
+  });
+  fouls.forEach(f => {
+    lines.push(`   :warning: *${f.displayName}* (${f.teamName}) — early by ${(f.earlyMs / 1000).toFixed(3)}s`);
+  });
+  if (early.length) {
+    lines.push(`   :raised_hand: Early presses: ${early.join(', ')}`);
+  }
+  slackPost('live', lines.join('\n'));
+}
+
+if (SLACK.live || SLACK.ops) {
+  console.log(`[SLACK] Enabled - live feed: ${SLACK.live ? `yes (${SLACK_CFG.live.flushMs}ms)` : 'no'}, ops feed: ${SLACK.ops ? `yes (${SLACK_CFG.ops.flushMs}ms)` : 'no'}`);
+} else {
+  console.log('[SLACK] Disabled (set SLACK_WEBHOOK_LIVE and/or SLACK_WEBHOOK_OPS to enable)');
+}
+
 
 let gameState = {
   timerStarted: false,
@@ -229,10 +465,14 @@ app.post('/api/verify-pin', (req, res) => {
   const { pin } = req.body || {};
   if (pinMatches(pin)) {
     clearPinFailures(key);
+    console.log(`[AUTH] PIN accepted from ${key}`);
+    slackPost('ops', `:unlock: Console unlocked from \`${key}\``);
     return res.json({ success: true });
   }
 
   recordPinFailure(key);
+  console.warn(`[AUTH] PIN rejected from ${key}`);
+  slackPost('ops', `:key: Incorrect PIN from \`${key}\``);
   return res.status(401).json({ success: false, error: 'Invalid PIN' });
 });
 
@@ -405,10 +645,10 @@ app.get('/', (req, res) => {
         </div>
 
         <div class="portal-card">
-          <div class="card-icon">📺</div>
-          <div class="card-title">Venue TV Display</div>
-          <div class="card-desc">High-contrast, large-format layout designed for 1080p monitors, TVs, and projectors.</div>
-          <a href="/tv" class="btn-launch">LAUNCH TV VIEW</a>
+          <div class="card-icon">🖥️</div>
+          <div class="card-title">Live Monitor</div>
+          <div class="card-desc">Scoreboard for a TV or projector in the room, and a live view remote players can follow on a laptop or phone.</div>
+          <a href="/monitor" class="btn-launch">LAUNCH MONITOR</a>
         </div>
 
         <div class="portal-card">
@@ -429,14 +669,18 @@ app.get('/', (req, res) => {
 });
 
 // Explicit Page Endpoints
-app.get('/tv', (req, res) => sendPage(res, 'tv'));
+app.get('/monitor', (req, res) => sendPage(res, 'monitor'));
 app.get('/host', (req, res) => sendPage(res, 'host'));
 app.get('/mm', (req, res) => sendPage(res, 'mobile')); // Mobile management console
 app.get('/virtual', (req, res) => sendPage(res, 'virtual'));
 
 // Direct .html paths resolve to the same branded output; without these,
 // express.static below would hand back the raw, unbranded file.
-app.get('/tv.html', (req, res) => sendPage(res, 'tv'));
+app.get('/monitor.html', (req, res) => sendPage(res, 'monitor'));
+
+// Old paths. A TV or stick already bookmarked to /tv keeps working.
+app.get('/tv', (req, res) => res.redirect(301, '/monitor'));
+app.get('/tv.html', (req, res) => res.redirect(301, '/monitor'));
 app.get('/main.html', (req, res) => sendPage(res, 'host'));
 app.get('/mobile.html', (req, res) => sendPage(res, 'mobile'));
 app.get('/virtual.html', (req, res) => sendPage(res, 'virtual'));
@@ -517,6 +761,7 @@ function recordPinFailure(key) {
     rec.count = 0;
     rec.firstAt = now;
     console.warn(`[AUTH] ${PIN_MAX_ATTEMPTS} failed PIN attempts from ${key} - locked out for ${lockMs / 1000}s (strike ${rec.strikes})`);
+    slackPost('ops', `:lock: ${PIN_MAX_ATTEMPTS} failed PIN attempts from \`${key}\` - locked out ${lockMs / 1000}s (strike ${rec.strikes})`);
   }
   pinAttempts.set(key, rec);
 }
@@ -557,6 +802,7 @@ function handleSocketDisconnect(ws) {
   
   if (ws.hardwareId && gameState.connectedDevices.has(ws.hardwareId)) {
     console.log(`[NET] Device disconnected: ${ws.hardwareId}`);
+    slackDevice(ws.hardwareId, `:electric_plug: \`${ws.hardwareId}\` dropped off`);
     gameState.connectedDevices.delete(ws.hardwareId);
     removed = true;
   } else {
@@ -621,6 +867,7 @@ function handleMessage(ws, data) {
       // we hang up. A legitimate console sends one wrong PIN at most.
       if (ws.pinFailures >= PIN_MAX_ATTEMPTS) {
         console.warn(`[AUTH] Closing socket after ${ws.pinFailures} failed PIN attempts`);
+        slackPost('ops', `:lock: Socket closed after ${ws.pinFailures} failed PIN attempts over the websocket`);
         if (ws.readyState === WebSocket.OPEN) ws.close();
       }
       return;
@@ -657,10 +904,17 @@ function handleMessage(ws, data) {
         let knownOffset = previous ? previous.clockOffset : 0;
         if (Number.isFinite(data.clockOffset)) knownOffset = Number(data.clockOffset);
 
+        // Devices report whether their clock offset is calibrated. An
+        // uncalibrated buzzer still works, but its reaction times are
+        // untrustworthy, so the host should be able to see it.
+        let calibrated = previous ? previous.calibrated : null;
+        if (typeof data.calibrated === 'boolean') calibrated = data.calibrated;
+
         gameState.connectedDevices.set(cleanId, {
           socket: ws,
           hardwareId: cleanId,
           clockOffset: knownOffset,
+          calibrated: calibrated,
           videoDelayMs: typeof data.videoDelayMs === 'number'
             ? data.videoDelayMs
             : (previous ? previous.videoDelayMs : 0)
@@ -677,6 +931,15 @@ function handleMessage(ws, data) {
 
         if (isNew) {
           console.log(`[SYNC] Registered new device: ${cleanId}`);
+          slackDevice(cleanId, `:white_check_mark: \`${cleanId}\` checked in`);
+          broadcastDeviceList();
+        } else if (previous && previous.calibrated !== calibrated) {
+          slackDevice(cleanId, calibrated
+            ? `:stopwatch: \`${cleanId}\` clock calibrated`
+            : `:warning: \`${cleanId}\` lost clock calibration`);
+          // Only on an actual change, so the 60s periodic sync from every
+          // buzzer does not turn into a broadcast every 60s per device.
+          console.log(`[SYNC] ${cleanId} calibration state -> ${calibrated}`);
           broadcastDeviceList();
         }
       }
@@ -703,6 +966,7 @@ function handleMessage(ws, data) {
     case 'TOGGLE_BCP': {
       gameState.bcpEnabled = !!data.bcpEnabled;
       console.log(`[CONFIG] BCP (Web Buzzer Check-in) Enabled: ${gameState.bcpEnabled}`);
+      slackPost('ops', `:electric_plug: Web buzzer check-in *${gameState.bcpEnabled ? 'enabled' : 'disabled'}*`);
       
       // If toggled off, immediately disconnect and prune all virtual buzzers
       if (!gameState.bcpEnabled) {
@@ -721,6 +985,18 @@ function handleMessage(ws, data) {
     }
 
     case 'UPDATE_MAPPINGS': {
+      // A virtual buzzer renames only itself; anything touching another
+      // device, or any team name, is a moderator acting from a console.
+      const mapKeys = Object.keys(data.mappings || {});
+      const isModeratorEdit = !!data.teams || mapKeys.some(id => id !== ws.hardwareId);
+
+      const beforeTeams = Object.fromEntries(
+        Object.entries(gameState.teams).map(([id, t]) => [id, t.teamName]));
+      const beforeMaps = new Map();
+      for (const [id, m] of gameState.deviceMappings.entries()) {
+        beforeMaps.set(id, { displayName: m.displayName, teamId: m.teamId });
+      }
+
       if (data.mappings && typeof data.mappings === 'object') {
         for (const [hwId, mapData] of Object.entries(data.mappings)) {
           if (mapData && mapData.displayName) {
@@ -754,6 +1030,9 @@ function handleMessage(ws, data) {
           }
         }
       }
+
+      reportMappingChanges(beforeTeams, beforeMaps, isModeratorEdit);
+
       broadcastDeviceList();
       break;
     }
@@ -761,6 +1040,7 @@ function handleMessage(ws, data) {
     case 'TOGGLE_VIRTUAL': {
       gameState.virtualBuzzersEnabled = !gameState.virtualBuzzersEnabled;
       console.log(`[CONFIG] Virtual buzzers participation enabled: ${gameState.virtualBuzzersEnabled}`);
+      slackPost('ops', `:iphone: Virtual buzzer play *${gameState.virtualBuzzersEnabled ? 'enabled' : 'disabled'}*`);
       
       for (const [hwId, mapping] of gameState.deviceMappings.entries()) {
         const isVirtual = hwId.startsWith('Virtual_') || hwId.startsWith('Mobile_');
@@ -795,8 +1075,15 @@ function handleMessage(ws, data) {
       gameState.timerStartTime = greenTargetTime;
       gameState.buzzes = [];
       gameState.fouls = [];
+      slackPrematureCount.clear();
 
       console.log(`\n[ROUND START] Host initiated open buzzers!`);
+      {
+        const playing = [...gameState.deviceMappings.values()]
+          .filter(m => m.teamId !== 'ignore' && m.teamId !== 'unassigned').length;
+        slackPost('live', `:rotating_light: *Buzzers open* — ${playing} buzzer(s) in play`, true);
+        slackPost('ops', `:rotating_light: Moderator opened buzzers (${playing} in play)`);
+      }
 
       broadcast({
         type: 'SCHEDULED_TIMER_START',
@@ -807,12 +1094,16 @@ function handleMessage(ws, data) {
     }
 
     case 'LED_TEST': {
+      slackPost('ops', ':bulb: LED test triggered');
       console.log(`[TEST] Host requested buzzer LED self-test`);
       broadcast({ type: 'LED_TEST' });
       break;
     }
 
     case 'RESET_ROUND': {
+      slackRoundSummary();   // reads buzzes/fouls before they are cleared
+      slackPost('ops', ':arrows_counterclockwise: Moderator reset the round');
+
       gameState.timerStarted = false;
       gameState.syncStartTime = null;
       gameState.timerStartTime = null;
@@ -834,7 +1125,12 @@ function handleMessage(ws, data) {
       broadcast({ type: 'BUTTON_PRESS_FLASH', hardwareId: hwId });
 
       const mapping = gameState.deviceMappings.get(hwId) || { displayName: hwId, teamId: 'unassigned' };
-      if (mapping.teamId === 'ignore' || mapping.teamId === 'unassigned') return;
+      if (mapping.teamId === 'ignore' || mapping.teamId === 'unassigned') {
+        // Dropped on the floor, which looks to the player like a dead
+        // buzzer. Surface it so a moderator can fix the assignment.
+        slackDevice(hwId, `:no_entry_sign: *${mapping.displayName}* buzzed but is ${mapping.teamId === 'ignore' ? 'disabled' : 'not assigned to a team'}`);
+        return;
+      }
 
       const rawPressTime = Number(data.clientPressTime);
       const clockOffset = Number(data.clockOffset) || 0;
@@ -843,7 +1139,17 @@ function handleMessage(ws, data) {
       const teamMeta = gameState.teams[mapping.teamId] || { teamName: `Team ${mapping.teamId}` };
 
       const device = gameState.connectedDevices.get(hwId);
-      if (device) device.clockOffset = clockOffset;
+      let calibrationChanged = false;
+      if (device) {
+        device.clockOffset = clockOffset;
+        if (typeof data.calibrated === 'boolean' && device.calibrated !== data.calibrated) {
+          device.calibrated = data.calibrated;
+          calibrationChanged = true;
+        }
+      }
+      // Again only on change, so a normal buzz does not trigger a roster
+      // broadcast on top of the rankings it already sends.
+      if (calibrationChanged) broadcastDeviceList();
 
       const videoDelayMs = Number(data.videoDelayMs) || 0;
       const trueBuzzServerTime = rawPressTime + clockOffset - videoDelayMs;
@@ -871,6 +1177,7 @@ function handleMessage(ws, data) {
           `but it arrived ${(arrivalReactionMs / 1000).toFixed(3)}s after the green light. ` +
           `Reported clockOffset ${clockOffset}ms is stale - device must re-calibrate.`
         );
+        slackDevice(hwId, `:alarm_clock: \`${hwId}\` buzz rejected - stale clock offset, device re-calibrating`);
         if (ws && ws.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({
             type: 'CLOCK_ERROR',
@@ -905,6 +1212,7 @@ function handleMessage(ws, data) {
           earlyMs: earlyMs
         };
         gameState.fouls.push(foulRecord);
+        slackPost('live', `:warning: *${mapping.displayName}* (${teamMeta.teamName}) jumped the light by ${(earlyMs / 1000).toFixed(3)}s`, true);
         broadcast({ type: 'FOUL_EVENT', foul: foulRecord });
         return;
       }
@@ -935,6 +1243,15 @@ function handleMessage(ws, data) {
         behindWinnerMs: parseFloat((entry.trueBuzzServerTime - winningTime).toFixed(2))
       }));
 
+      {
+        const place = rankings.find(r => r.hardwareId === hwId);
+        const secs = (buzzRecord.reactionTimeMs / 1000).toFixed(3);
+        slackPost('live', place && place.rank === 1
+          ? `:bell: *${buzzRecord.displayName}* (${buzzRecord.teamName}) buzzed in first — *${secs}s*`
+          : `:arrow_right_hook: ${place ? place.rank : '?'}. *${buzzRecord.displayName}* (${buzzRecord.teamName}) — ${secs}s _+${place ? place.behindWinnerMs.toFixed(0) : '?'}ms_`,
+          true);
+      }
+
       broadcast({
         type: 'RANKINGS_UPDATE',
         rankings: rankings,
@@ -946,6 +1263,14 @@ function handleMessage(ws, data) {
 }
 
 function sendPrematureNudge(ws, hwId, mapping, teamMeta) {
+  // First press per device per round is reported; the rest are counted and
+  // rolled into the round summary, so a held button stays one line.
+  const n = (slackPrematureCount.get(hwId) || 0) + 1;
+  slackPrematureCount.set(hwId, n);
+  if (n === 1) {
+    slackPost('live', `:raised_hand: *${mapping.displayName}* (${teamMeta.teamName}) pressed before the lights`, true);
+  }
+
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'PREMATURE_RESET' }));
   }
@@ -979,7 +1304,8 @@ function buildDeviceListPayload() {
       displayName: mapping.displayName,
       teamId: mapping.teamId,
       teamName: resolvedTeamName,
-      clockOffset: device.clockOffset
+      clockOffset: device.clockOffset,
+      calibrated: device.calibrated
     });
   }
 
@@ -1017,4 +1343,5 @@ function broadcast(payload) {
 
 server.listen(PORT, () => {
   console.log(`[HTTP] Web server running on http://localhost:${PORT}`);
+  slackPost('ops', `:large_green_circle: Buzzer server started (port ${PORT}, PIN ${ADMIN_PIN ? 'enabled' : 'disabled'})`);
 });
