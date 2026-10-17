@@ -101,6 +101,7 @@
     .btn-toggle { background: #10b981; color: #ffffff; display: none; }
     .btn-toggle.active { background: #ef4444; color: #ffffff; }
     .btn-save { background: var(--accent-orange); color: #fff; }
+    .btn-teamreset { background: #7c3aed; color: #fff; }
     button:disabled { opacity: 0.4; cursor: not-allowed; filter: none; }
 
     .form-group { display: flex; flex-direction: column; gap: 4px; }
@@ -123,6 +124,12 @@
     .buzzer-item { background: var(--input-bg); border: 1px solid var(--card-border); border-radius: 6px; padding: 10px; display: flex; flex-direction: column; gap: 6px; }
     .buzzer-item-header { display: flex; justify-content: space-between; align-items: center; }
     .buzzer-title { font-size: 0.78rem; font-weight: 800; color: var(--accent-orange); word-break: break-all; display: flex; align-items: center; gap: 6px; }
+    .tie-tag {
+      font-size: 0.65rem; font-weight: 800; color: #fff;
+      background: rgba(255, 105, 0, 0.35); border: 1px solid var(--accent-orange);
+      padding: 1px 5px; border-radius: 4px; text-transform: uppercase;
+      letter-spacing: 0.03em; white-space: nowrap; margin-left: 4px;
+    }
     .uncal-tag {
       font-size: 0.65rem; font-weight: 800; color: #fde047;
       background: rgba(250, 204, 21, 0.18); border: 1px solid #facc15;
@@ -185,6 +192,7 @@
     <button id="ledtest-btn" class="btn btn-test" disabled onclick="testLeds()">💡 Test Buzzer LEDs</button>
     <button id="btn-toggle-virtual" class="btn btn-toggle" disabled onclick="toggleVirtualBuzzers()">📱 <span id="virtual-btn-text">Enable Web Buzzers</span></button>
     <button id="save-btn" class="btn btn-save" disabled onclick="saveMappings()">💾 Save Names & Teams</button>
+      <button id="reset-teams-btn" class="btn btn-teamreset" disabled onclick="resetTeamsAndAssignments()">♻️ Reset Teams</button>
   </div>
 
   <div id="event-feed">
@@ -515,6 +523,17 @@
       }
     }
 
+    // Clears every team name back to its default and unmaps every buzzer. The
+    // server does the work (and checks the PIN); this only asks first, because
+    // it throws away a lot of setup in one click.
+    function resetTeamsAndAssignments() {
+      if (!adminUnlocked) return;
+      if (!confirm('This action will reset team names, and unmap all mapped buzzers. Are you sure you want to do this?')) return;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: 'RESET_TEAMS', pin: activePin }));
+      }
+    }
+
     function saveMappings() {
       if (!socket || socket.readyState !== WebSocket.OPEN) return;
 
@@ -614,7 +633,7 @@
           break;
         case 'RANKINGS_UPDATE':
           renderRankings(data.rankings);
-          showWinnerSpotlight(data.rankings[0]);
+          showWinnerSpotlight(data.rankings[0], data.rankings);
           break;
       }
     }
@@ -799,6 +818,7 @@
       const testBtn = document.getElementById('ledtest-btn');
       const virtualToggleBtn = document.getElementById('btn-toggle-virtual');
       const saveBtn = document.getElementById('save-btn');
+      const resetTeamsBtn = document.getElementById('reset-teams-btn');
 
       // Status text reflects the room, not the operator's permissions.
       updateTimerBoxIdleState();
@@ -809,6 +829,7 @@
         testBtn.disabled = true;
         virtualToggleBtn.disabled = true;
         saveBtn.disabled = true;
+        resetTeamsBtn.disabled = true;
         return;
       }
 
@@ -816,6 +837,7 @@
       testBtn.classList.add('active');
       virtualToggleBtn.disabled = false;
       saveBtn.disabled = false;
+      resetTeamsBtn.disabled = false;
 
       // A round is underway from the instant the sequence starts (countdown
       // animating) through to the green light, so Open must stay inert for
@@ -920,14 +942,34 @@
       prematureTimeout = setTimeout(() => { banner.style.display = 'none'; }, 3500);
     }
 
-    function showWinnerSpotlight(winner) {
+    // Decimal places on a reaction time. Set once, server side, in config.json
+    // (display.timeDecimals) and delivered with the page; 3 if absent or invalid.
+    const TIME_DECIMALS = (() => {
+      const n = Math.round(Number(((window.APP_CONFIG || {}).display || {}).timeDecimals));
+      return Number.isFinite(n) && n >= 0 && n <= 6 ? n : 3;
+    })();
+    function fmtSecs(ms) { return (ms / 1000).toFixed(TIME_DECIMALS); }
+    // Whole milliseconds: finer than that is below what two buzzers can be
+    // compared to, so it would claim a precision the system does not have.
+    function fmtGapMs(ms) { return Math.round(Math.abs(ms)) + 'ms'; }
+
+    function showWinnerSpotlight(winner, rankings) {
       if (!winner) return;
       const banner = document.getElementById('winner-spotlight');
       banner.style.display = 'flex';
       banner.style.order = Date.now();
+
+      // The server shares rank 1 between buzzes it cannot separate. Say so,
+      // name who it is tied with, and show how far apart they really were.
+      const tied = (rankings || []).filter(r => r.rank === winner.rank && r.hardwareId !== winner.hardwareId);
+      let teamLine = `Team: ${winner.teamName || '—'}`;
+      if (tied.length) {
+        teamLine += `  ·  TIE with ${tied.map(t => t.displayName).join(', ')} (too close to call)`;
+      }
+
       document.getElementById('winner-name').textContent = winner.displayName || '';
-      document.getElementById('winner-team').textContent = `Team: ${winner.teamName || '—'}`;
-      document.getElementById('winner-time').textContent = `+${(winner.reactionTimeMs / 1000).toFixed(3)}s`;
+      document.getElementById('winner-team').textContent = teamLine;
+      document.getElementById('winner-time').textContent = `+${fmtSecs(winner.reactionTimeMs)}s`;
     }
 
     function showFoulSpotlight(foul) {
@@ -937,21 +979,28 @@
       banner.style.order = Date.now();
       document.getElementById('foul-name').textContent = foul.displayName || '';
       document.getElementById('foul-team').textContent = `Team: ${foul.teamName || '—'}`;
-      document.getElementById('foul-time').textContent = `${(foul.earlyMs / 1000).toFixed(3)}s`;
+      document.getElementById('foul-time').textContent = `${fmtSecs(foul.earlyMs)}s`;
     }
 
     function renderRankings(rankings) {
       const table = document.getElementById('rankings-table');
       if (!rankings || rankings.length === 0) return;
-      table.innerHTML = rankings.map(r => `
+      table.innerHTML = rankings.map((r, i) => {
+        const behind = r.tie ? 'TIE' : (i === 0 ? '—' : `+${fmtGapMs(r.behindWinnerMs)}`);
+        // A buzz that follows an early press this round is the shape of a
+        // held button. Usually innocent (tap, let go, buzz), so flag it.
+        const early = r.earlyPresses > 0
+          ? ` <span class="uncal-tag" title="This buzzer pressed early earlier in the round">early press</span>`
+          : '';
+        return `
         <tr class="rank-${r.rank}">
-          <td>#${r.rank}</td>
-          <td><strong>${escapeHTML(r.displayName)}</strong></td>
+          <td>#${r.rank}${r.tie ? '<span class="tie-tag">tie</span>' : ''}</td>
+          <td><strong>${escapeHTML(r.displayName)}</strong>${early}</td>
           <td>${escapeHTML(r.teamName)}</td>
-          <td>+${(r.reactionTimeMs / 1000).toFixed(3)}s</td>
-          <td>${r.behindWinnerMs === 0 ? '—' : '+' + r.behindWinnerMs.toFixed(1) + 'ms'}</td>
-        </tr>
-      `).join('');
+          <td>+${fmtSecs(r.reactionTimeMs)}s</td>
+          <td>${behind}</td>
+        </tr>`;
+      }).join('');
     }
 
     function renderFouls(fouls) {
@@ -961,7 +1010,7 @@
         <tr class="foul-row">
           <td><strong>${escapeHTML(f.displayName)}</strong></td>
           <td>${escapeHTML(f.teamName)}</td>
-          <td>-${(f.earlyMs / 1000).toFixed(3)}s</td>
+          <td>-${fmtSecs(f.earlyMs)}s</td>
           <td>🚨 Jumped Light</td>
         </tr>
       `).join('');

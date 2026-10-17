@@ -212,6 +212,13 @@
     let displayName = localStorage.getItem(`${STORAGE_PREFIX}_player_name`) || hardwareId;
     document.getElementById('player-name-input').value = displayName;
 
+    // Decimal places on a reaction time. Set once, server side, in config.json
+    // (display.timeDecimals) and delivered with the page; 3 if absent or invalid.
+    const TIME_DECIMALS = (() => {
+      const n = Math.round(Number(((window.APP_CONFIG || {}).display || {}).timeDecimals));
+      return Number.isFinite(n) && n >= 0 && n <= 6 ? n : 3;
+    })();
+
     let syncStartTime = null;
     let greenTargetTime = null;
     let animFrameId = null;
@@ -553,7 +560,7 @@
       const banner = document.getElementById('countdown-banner');
       banner.className = 'countdown-banner stage-foul';
       const early = foul && typeof foul.earlyMs === 'number'
-        ? ` (${(foul.earlyMs / 1000).toFixed(3)}s early)`
+        ? ` (${(foul.earlyMs / 1000).toFixed(TIME_DECIMALS)}s early)`
         : '';
       document.getElementById('countdown-text').textContent = `⚠️ Early Foul!${early}`;
 
@@ -600,14 +607,16 @@
       const banner = document.getElementById('countdown-banner');
       banner.className = 'countdown-banner stage-result';
       document.getElementById('countdown-text').textContent =
-        `#${mine.rank} · ${(mine.reactionTimeMs / 1000).toFixed(3)}s`;
+        `#${mine.rank}${mine.tie ? ' (tie)' : ''} · ${(mine.reactionTimeMs / 1000).toFixed(TIME_DECIMALS)}s`;
 
       const btn = document.getElementById('buzz-btn');
       btn.className = 'buzz-button sent';
       btn.disabled = true;
       document.getElementById('buzz-btn-text').textContent = `#${mine.rank}`;
       document.getElementById('buzz-btn-sub').textContent =
-        mine.behindWinnerMs === 0 ? 'First in!' : `+${mine.behindWinnerMs.toFixed(0)}ms behind`;
+        mine.tie ? (mine.rank === 1 ? 'Tied for first!' : 'Tied')
+          : mine.behindWinnerMs === 0 ? 'First in!'
+          : `+${Math.round(mine.behindWinnerMs)}ms behind`;
     }
 
     function resetBuzzerUI() {

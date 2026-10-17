@@ -326,6 +326,12 @@ int64_t getEpochMillis64() {
   return ((int64_t)tv.tv_sec * 1000LL) + ((int64_t)tv.tv_usec / 1000LL);
 }
 
+int64_t getEpochMicros64() {
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return ((int64_t)tv.tv_sec * 1000000LL) + (int64_t)tv.tv_usec;
+}
+
 void startSyncSample(int index, bool isBackground = false) {
   if (isBackground) {
     lastPeriodicSyncMs = millis();
@@ -529,9 +535,16 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
 
       else if (strcmp(msgType, "PREMATURE_RESET") == 0) {
         hasBuzzedThisRound = false;
-        isLockedOut = false;
         buttonPressed = false;
-        LOG_EVT("[EVENT] PREMATURE_RESET - re-armed\n");
+        // isLockedOut is deliberately NOT cleared here. It used to be, which
+        // re-armed the buzzer while the button was still physically down. The
+        // contact bounce (or chatter) when that held button was released then
+        // looked like a brand new press, and if it landed after green it
+        // scored as a win - so pressing early and holding was a way to buzz
+        // first. The lock now stays until the loop below sees the button
+        // released and stable for 150 ms, and only a press that starts after
+        // that can count.
+        LOG_EVT("[EVENT] PREMATURE_RESET - re-armed once the button is released\n");
 
         if (lightSequenceActive && currentLightState <= 0) {
           currentLightState = -1;
@@ -801,11 +814,15 @@ void loop() {
           LOG_ERR("[BUZZ] Sending while uncalibrated - server will arbitrate.\n");
         }
 
+        // Read the uptime and epoch clocks back to back so the press time is
+        // derived from one instant. Microseconds all the way: the old
+        // millisecond arithmetic truncated twice and put two humans who
+        // pressed within a millisecond of each other on an identical time.
         uint64_t conversionUptimeMicros = esp_timer_get_time();
-        int64_t conversionEpochMs = getEpochMillis64();
+        int64_t conversionEpochUs = getEpochMicros64();
 
-        double timeSincePressMs = (double)(conversionUptimeMicros - rawPressMicros) / 1000.0;
-        int64_t pressTimeMs = conversionEpochMs - (int64_t)timeSincePressMs;
+        int64_t pressTimeUs = conversionEpochUs - (int64_t)(conversionUptimeMicros - rawPressMicros);
+        int64_t pressTimeMs = pressTimeUs / 1000;   // kept for servers that predate clientPressTimeUs
 
         if (lightSequenceActive && (long)(millis() - syncStartMillis) >= 0) {
           hasBuzzedThisRound = true;
@@ -817,10 +834,11 @@ void loop() {
           LED_BUZZED();
         }
 
-        StaticJsonDocument<250> doc;
+        StaticJsonDocument<300> doc;   // was 250; clientPressTimeUs added a field
         doc["type"] = "BUZZ";
         doc["playerId"] = playerId;
         doc["clientPressTime"] = pressTimeMs;
+        doc["clientPressTimeUs"] = pressTimeUs;
         doc["clockOffset"] = clockOffsetMs;
         doc["calibrated"] = isCalibrated;
 

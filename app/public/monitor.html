@@ -179,10 +179,17 @@
       margin-top: 0.3vh;
     }
     .is-winner .stat .time { color: #ffd6b0; }
+    .stat .gap.is-tie { color: var(--accent-orange); font-weight: 900; letter-spacing: 0.04em; }
 
     /* Overlaid rather than a flex sibling: as a sibling, the empty
        results grid still claimed its share of the row and pushed this
        off-centre. */
+    /* Shown when a round went live and nobody buzzed. */
+    #stage-empty.no-buzz {
+      font-size: 8vh; font-weight: 900; font-style: normal;
+      color: var(--text-white); line-height: 1.15;
+    }
+
     #stage-empty {
       position: absolute; inset: 0;
       display: flex; align-items: center; justify-content: center;
@@ -303,6 +310,7 @@
 
     /* Portrait: height is plentiful, width is not. */
     @media (max-aspect-ratio: 3/4) {
+      #stage-empty.no-buzz { font-size: 5vh; }
       .cd-number { font-size: 20vh; gap: 3vw; }
       .cd-mascot { font-size: 9vh; }
       .cd-phase { font-size: 3.4vh; }
@@ -409,6 +417,79 @@
     let foulsList = [];
     let toastTimeout = null;
     let liveHideTimeout = null;
+
+    // ---- GO screen -----------------------------------------------------
+    // GO used to vanish after under two seconds and fall straight back to
+    // "Waiting for the next question", which reads as the round having ended
+    // before anyone had a chance to react. It now stays for GO_HOLD_MS; the
+    // first buzz takes it down at once, and if nobody buzzes it is replaced
+    // by one of the prompts below. Both can be overridden from config.json
+    // under pages.monitor ("goHoldMs", "noBuzzPrompts").
+    const GO_HOLD_MS = Number(CONFIG.page.goHoldMs) > 0 ? Number(CONFIG.page.goHoldMs) : 10000;
+
+    const DEFAULT_NO_BUZZ_PROMPTS = [
+      "Really? Nobody?",
+      "Crickets. Absolute crickets.",
+      "Is this thing on?",
+      "Did everybody fall asleep?",
+      "The silence is deafening.",
+      "Buzzers work. We tested them.",
+      "Not even a guess?",
+      "Fine. We'll all just stare at the clue.",
+      "Somebody blink first.",
+      "I can hear the fans spinning.",
+      "That one was easy. We checked.",
+      "A bold strategy: let the clue win.",
+      "Tough crowd.",
+      "Anyone? Anyone?",
+      "Wow. Tumbleweeds."
+    ];
+    const NO_BUZZ_PROMPTS = (Array.isArray(CONFIG.page.noBuzzPrompts) && CONFIG.page.noBuzzPrompts.length)
+      ? CONFIG.page.noBuzzPrompts.map(String)
+      : DEFAULT_NO_BUZZ_PROMPTS;
+    const EMPTY_STAGE_TEXT = 'Waiting for the next question...';
+
+    let lastPromptIndex = -1;
+    let resultsShown = false;     // a valid buzz has been rendered this round
+
+    // Random, but never the same line twice running.
+    function pickNoBuzzPrompt() {
+      if (NO_BUZZ_PROMPTS.length === 1) return NO_BUZZ_PROMPTS[0];
+      let i;
+      do { i = Math.floor(Math.random() * NO_BUZZ_PROMPTS.length); } while (i === lastPromptIndex);
+      lastPromptIndex = i;
+      return NO_BUZZ_PROMPTS[i];
+    }
+
+    // Take the GO screen down and cancel its timer. Safe to call any time.
+    function endGoDisplay() {
+      if (liveHideTimeout) { clearTimeout(liveHideTimeout); liveHideTimeout = null; }
+      document.getElementById('countdown-layer').classList.remove('visible');
+      document.body.classList.remove('is-live');
+    }
+
+    // The hold ran out and nobody buzzed.
+    function showNoBuzzPrompt() {
+      liveHideTimeout = null;
+      endGoDisplay();
+      if (resultsShown) return;
+      const el = document.getElementById('stage-empty');
+      el.textContent = pickNoBuzzPrompt();
+      el.classList.add('no-buzz');
+      el.style.display = 'flex';
+    }
+
+    // ---- number formatting ---------------------------------------------
+    // Decimal places on a reaction time. Set once, server side, in config.json
+    // (display.timeDecimals) and delivered with the page; 3 if absent or invalid.
+    const TIME_DECIMALS = (() => {
+      const n = Math.round(Number(((window.APP_CONFIG || {}).display || {}).timeDecimals));
+      return Number.isFinite(n) && n >= 0 && n <= 6 ? n : 3;
+    })();
+    function fmtSecs(ms) { return (ms / 1000).toFixed(TIME_DECIMALS); }
+    // Whole milliseconds: finer than that is below what two buzzers can be
+    // compared to, so it would claim a precision the system does not have.
+    function fmtGapMs(ms) { return Math.round(Math.abs(ms)) + 'ms'; }
 
     let clockOffsetMs = 0;
     let isCalibrated = false;
@@ -543,6 +624,7 @@
 
         case 'ROUND_RESET':
           stopTimerUI();
+          endGoDisplay();     // otherwise a pending hold fires after the reset
           document.body.classList.remove('is-live', 'hide-roster');
           document.getElementById('countdown-layer').classList.remove('visible');
           document.getElementById('timer-box').textContent = 'Ready to Sync';
@@ -661,20 +743,33 @@
     }
 
     function clearResults() {
+      resultsShown = false;
       document.getElementById('results-area').innerHTML = '';
-      document.getElementById('stage-empty').style.display = 'flex';
+      const empty = document.getElementById('stage-empty');
+      empty.textContent = EMPTY_STAGE_TEXT;
+      empty.classList.remove('no-buzz');
+      empty.style.display = 'flex';
     }
 
     function renderRankings(rankings) {
       if (!rankings || rankings.length === 0) return;
 
-      document.getElementById('stage-empty').style.display = 'none';
+      // A buzz is in: the GO screen has done its job and would otherwise sit
+      // on top of the results for the rest of its hold.
+      resultsShown = true;
+      endGoDisplay();
+
+      const empty = document.getElementById('stage-empty');
+      empty.style.display = 'none';
+      empty.classList.remove('no-buzz');
       document.body.classList.add('hide-roster');
 
       const area = document.getElementById('results-area');
-      area.innerHTML = rankings.map(r => {
-        const secs = (r.reactionTimeMs / 1000).toFixed(2);
-        const gap = r.behindWinnerMs === 0 ? 'fastest' : `+${r.behindWinnerMs.toFixed(0)}ms`;
+      area.innerHTML = rankings.map((r, i) => {
+        const secs = fmtSecs(r.reactionTimeMs);
+        // Buzzes the server cannot honestly separate share a rank and are
+        // marked TIE; a gap is only shown when it is a real one.
+        const gap = r.tie ? 'TIE' : (i === 0 ? 'fastest' : `+${fmtGapMs(r.behindWinnerMs)}`);
         return `
           <div class="result-row ${r.rank === 1 ? 'is-winner' : ''}">
             <div class="rank-chip">${r.rank}</div>
@@ -684,7 +779,7 @@
             </div>
             <div class="stat">
               <div class="time">${secs}s</div>
-              <div class="gap">${gap}</div>
+              <div class="gap ${r.tie ? 'is-tie' : ''}">${gap}</div>
             </div>
           </div>
         `;
@@ -696,7 +791,7 @@
     function foulChipHtml(f) {
       return `<span class="foul-chip">`
         + `<span class="fname">${escapeHTML(f.displayName)}</span>`
-        + `<span class="fpen">-${(f.earlyMs / 1000).toFixed(2)}s</span>`
+        + `<span class="fpen">-${fmtSecs(f.earlyMs)}s</span>`
         + `</span>`;
     }
 
@@ -822,17 +917,19 @@
         } else {
           timerBox.textContent = 'Buzzers live';
           timerBox.style.color = 'var(--accent-green)';
+          stopTimerUI();
+
+          // If a buzz has already been drawn (this display reached green a
+          // moment after the server accepted one), do not put GO on top of it.
+          if (resultsShown) { endGoDisplay(); return; }
+
           phase.textContent = 'Buzz in now';
           value.textContent = 'GO';
           number.className = 'cd-number stage-live';
           mascot.textContent = MASCOT;
           document.body.classList.add('is-live');
-          stopTimerUI();
 
-          liveHideTimeout = setTimeout(() => {
-            layer.classList.remove('visible');
-            document.body.classList.remove('is-live');
-          }, 1800);
+          liveHideTimeout = setTimeout(showNoBuzzPrompt, GO_HOLD_MS);
         }
       }
       animFrameId = requestAnimationFrame(updateDisplay);

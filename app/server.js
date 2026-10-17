@@ -20,6 +20,10 @@ const crypto = require('crypto');
 //   {appBase}     "{org} {productBase}"          e.g. "Acme Quiz Night"
 // ====================================================================
 const DEFAULT_CONFIG = {
+  display: {
+    // Decimal places on reaction times, everywhere. See TIME_DECIMALS below.
+    timeDecimals: 3
+  },
   brand: {
     organizationName: '',
     // A game-name placeholder, since the copy templates below read as
@@ -87,7 +91,7 @@ function resolveTokens(cfg) {
 
   // Brand values are literals, never templates - only the display copy
   // gets token substitution.
-  return { brand: cfg.brand, portal: fill(cfg.portal), pages: fill(cfg.pages) };
+  return { brand: cfg.brand, display: cfg.display, portal: fill(cfg.portal), pages: fill(cfg.pages) };
 }
 
 function loadConfig() {
@@ -118,6 +122,18 @@ function loadConfig() {
 
 const CONFIG = loadConfig();
 
+// How many decimal places a reaction time is shown to, on every screen and in
+// Slack. The default is 3 (whole milliseconds) because that is as fine as the
+// system can honestly claim: virtual buzzers and older firmware only report
+// whole milliseconds, and each buzzer's clock offset is estimated over WiFi
+// and is itself only good to a millisecond or so, so a 4th decimal between two
+// DIFFERENT buzzers is noise. Set display.timeDecimals in config.json to
+// change it (0-6); anything else falls back to 3.
+const TIME_DECIMALS = (() => {
+  const n = Math.round(Number(CONFIG.display && CONFIG.display.timeDecimals));
+  return Number.isFinite(n) && n >= 0 && n <= 6 ? n : 3;
+})();
+
 function escapeHtml(str) {
   return String(str === undefined || str === null ? '' : str)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -146,7 +162,7 @@ function renderPage(pageKey) {
   const filePath = path.join(__dirname, 'public', PAGE_FILES[pageKey]);
   let html = fs.readFileSync(filePath, 'utf8');
 
-  const payload = { brand: CONFIG.brand, page: CONFIG.pages[pageKey] || {} };
+  const payload = { brand: CONFIG.brand, page: CONFIG.pages[pageKey] || {}, display: { timeDecimals: TIME_DECIMALS } };
   const tag = `<script>window.APP_CONFIG=${toInlineJson(payload)};</script>`;
 
   if (html.includes('</head>')) {
@@ -193,6 +209,18 @@ const ARRIVAL_TOLERANCE_MS = 1000;
 // corrected underneath it, so the offset gets counted twice.
 const MAX_PLAUSIBLE_REACTION_MS = 120000;
 
+// Two buzzes within this of each other are reported as a tie and share a
+// rank, instead of one being quietly declared the winner. It reflects how
+// accurately two DIFFERENT buzzers can be compared, not human reflexes. Each
+// buzzer's clock offset is estimated over WiFi from whole-millisecond stamps;
+// simulating the firmware's calibration at a 26 ms round trip gives an error
+// between two buzzers of about 0.6 ms even on a perfectly clean network, about
+// 1.2 ms (95% within 2.4) on a typical one, and about 3 ms (95% within 6) on
+// busy WiFi. At 2.5 ms, a typical-network gap just outside the tie is shown in
+// the wrong order well under 1% of the time. Lower it if the server runs on
+// the same network as the buzzers; raise it for a noisy venue.
+const TIE_THRESHOLD_MS = 2.5;
+
 
 // ====================================================================
 // SLACK NOTIFIER (optional)
@@ -231,6 +259,8 @@ const slackQueues = { live: [], ops: [] };
 // Premature presses are counted per device per round. Someone leaning on a
 // button could otherwise post several lines a second.
 const slackPrematureCount = new Map();
+// Monotonic arrival number for buzzes, used only as a last-resort tie-break.
+let buzzArrivalSeq = 0;
 const slackDropped = { live: 0, ops: 0 };
 const slackChurn = new Map();
 const slackState = {
@@ -381,6 +411,79 @@ function reportMappingChanges(beforeTeams, beforeMaps, isModeratorEdit) {
     : ':memo: Buzzer self-registered a name') + '\n' + lines.join('\n'));
 }
 
+// ---------------------------------------------------------------------------
+// Number formatting shared by Slack and the rankings broadcast.
+// ---------------------------------------------------------------------------
+function fmtSeconds(ms) { return (ms / 1000).toFixed(TIME_DECIMALS); }
+
+// Whole milliseconds. Anything finer is below what two buzzers can be compared
+// to, so showing it would claim a precision the system does not have.
+function fmtGap(ms) { return Math.round(Math.abs(ms)) + 'ms'; }
+
+// Rankings are built in one place so the console, monitor, Slack and the
+// round summary can never disagree. Entries must already be sorted. Anything
+// within TIE_THRESHOLD_MS of a group's fastest buzz shares that rank (1, 1, 3)
+// and is flagged, so a near-simultaneous buzz is never settled by whichever
+// message happened to reach the server first. Measured from the group's
+// leader rather than from the neighbour, so a run of buzzes each just inside
+// the threshold cannot chain into a "tie" between buzzers well outside it.
+function buildRankings(buzzes) {
+  const out = [];
+  let leader = 0;
+  buzzes.forEach((entry, i) => {
+    const tiedWithLeader = i > leader &&
+      (entry.trueBuzzServerTime - buzzes[leader].trueBuzzServerTime) < TIE_THRESHOLD_MS;
+    if (tiedWithLeader) out[leader].tie = true;   // the leader is part of the tie too
+    else leader = i;                              // otherwise this entry starts a new group
+    out.push({
+      rank: tiedWithLeader ? out[leader].rank : i + 1,
+      hardwareId: entry.hardwareId,
+      displayName: entry.displayName,
+      teamName: entry.teamName,
+      reactionTimeMs: entry.reactionTimeMs,
+      behindWinnerMs: parseFloat((entry.trueBuzzServerTime - buzzes[0].trueBuzzServerTime).toFixed(3)),
+      tie: tiedWithLeader,
+      earlyPresses: entry.earlyPresses || 0
+    });
+  });
+  return out;
+}
+
+// One line per accepted buzz, as it happens. Arrival order is not press order:
+// two buzzes a few milliseconds apart can reach the server either way round,
+// so the wording has to cope with a later arrival turning out to be faster.
+function reportBuzzToSlack(buzz, rankings) {
+  if (!SLACK.live && !SLACK.ops) return;
+  const place = rankings.find(r => r.hardwareId === buzz.hardwareId);
+  if (!place) return;
+
+  const secs = fmtSeconds(buzz.reactionTimeMs);
+  const who = `*${buzz.displayName}* (${buzz.teamName})`;
+  let line;
+
+  if (rankings.length === 1) {
+    line = `:bell: ${who} buzzed in first — *${secs}s*`;
+  } else if (place.rank === 1 && place.tie) {
+    const others = rankings.filter(r => r.rank === 1 && r.hardwareId !== buzz.hardwareId);
+    line = `:handshake: ${who} *tied for first* with ${others.map(o => o.displayName).join(', ')}`
+         + ` — *${secs}s* _(too close to call)_`;
+  } else if (place.rank === 1) {
+    const next = rankings[1];
+    line = `:bell: ${who} *takes the lead* — *${secs}s* _(${fmtGap(next.behindWinnerMs)} ahead of ${next.displayName})_`;
+  } else {
+    line = `:arrow_right_hook: ${place.rank}. ${who} — ${secs}s _${place.tie ? 'tied' : '+' + fmtGap(place.behindWinnerMs)}_`;
+  }
+  slackPost('live', line, true);
+
+  // A buzz that follows an early press in the same round is the shape of the
+  // held-button problem. It is usually innocent (tap, release, then buzz), so
+  // flag it for a human rather than act on it.
+  if (buzz.earlyPresses > 0) {
+    slackPost('ops', `:eyes: *${buzz.displayName}* scored a buzz after ${buzz.earlyPresses} early press(es) this round`
+      + (buzz.precision === 'ms' ? ' — this buzzer is on older firmware without the held-button fix' : ' — worth confirming they were not holding the button'));
+  }
+}
+
 function slackRoundSummary() {
   if (!SLACK.live) return;
   const buzzes = gameState.buzzes || [];
@@ -400,13 +503,14 @@ function slackRoundSummary() {
   }
 
   const lines = [`:bell: *Round results*`];
-  const winner = buzzes.length ? buzzes[0].trueBuzzServerTime : 0;
-  buzzes.forEach((b, i) => {
-    const behind = i === 0 ? 'fastest' : `+${(b.trueBuzzServerTime - winner).toFixed(0)}ms`;
-    lines.push(`   ${i + 1}. *${b.displayName}* (${b.teamName}) — ${(b.reactionTimeMs / 1000).toFixed(3)}s _${behind}_`);
+  buildRankings(buzzes).forEach((r, i) => {
+    const behind = i === 0
+      ? (r.tie ? 'TIE for first' : 'fastest')
+      : (r.tie ? 'TIE' : `+${fmtGap(r.behindWinnerMs)}`);
+    lines.push(`   ${r.rank}. *${r.displayName}* (${r.teamName}) — ${fmtSeconds(r.reactionTimeMs)}s _${behind}_`);
   });
   fouls.forEach(f => {
-    lines.push(`   :warning: *${f.displayName}* (${f.teamName}) — early by ${(f.earlyMs / 1000).toFixed(3)}s`);
+    lines.push(`   :warning: *${f.displayName}* (${f.teamName}) — early by ${fmtSeconds(f.earlyMs)}s`);
   });
   if (early.length) {
     lines.push(`   :raised_hand: Early presses: ${early.join(', ')}`);
@@ -853,7 +957,7 @@ wss.on('connection', (ws, req) => {
 
 function handleMessage(ws, data) {
   // Only strict host game controls are locked behind the PIN. UPDATE_MAPPINGS is now allowed.
-  const adminTypes = ['START_TIMER', 'LED_TEST', 'RESET_ROUND', 'TOGGLE_VIRTUAL', 'TOGGLE_BCP']; // Added TOGGLE_VIRTUAL & TOGGLE_BCP
+  const adminTypes = ['START_TIMER', 'LED_TEST', 'RESET_ROUND', 'TOGGLE_VIRTUAL', 'TOGGLE_BCP', 'RESET_TEAMS']; // Added TOGGLE_VIRTUAL & TOGGLE_BCP
   if (adminTypes.includes(data.type)) {
     if (!isAuthorized(data.pin)) {
       ws.pinFailures = (ws.pinFailures || 0) + 1;
@@ -989,6 +1093,10 @@ function handleMessage(ws, data) {
       // device, or any team name, is a moderator acting from a console.
       const mapKeys = Object.keys(data.mappings || {});
       const isModeratorEdit = !!data.teams || mapKeys.some(id => id !== ws.hardwareId);
+      // A buzzer naming itself has no business choosing its team. Honouring the
+      // team it sends let a virtual player whose connection dropped during a
+      // reset reconnect with their old team and quietly undo it for themselves.
+      const selfOnly = !isModeratorEdit && mapKeys.length > 0;
 
       const beforeTeams = Object.fromEntries(
         Object.entries(gameState.teams).map(([id, t]) => [id, t.teamName]));
@@ -1004,7 +1112,7 @@ function handleMessage(ws, data) {
             
             // Preserve the team assignment if it already exists and the incoming request didn't specify one
             let finalTeam = existingMapping.teamId || 'unassigned';
-            if (mapData.teamId && mapData.teamId !== 'unassigned') {
+            if (!selfOnly && mapData.teamId && mapData.teamId !== 'unassigned') {
               finalTeam = mapData.teamId;
             }
 
@@ -1033,6 +1141,34 @@ function handleMessage(ws, data) {
 
       reportMappingChanges(beforeTeams, beforeMaps, isModeratorEdit);
 
+      broadcastDeviceList();
+      break;
+    }
+
+    case 'RESET_TEAMS': {
+      // Back to a clean slate: every team name returns to its default and every
+      // buzzer is unmapped. Player names are kept, because they identify the
+      // buzzer, not the team it was on.
+      for (const id of Object.keys(gameState.teams)) {
+        gameState.teams[id].teamName = `Team ${id}`;
+      }
+
+      let unmapped = 0;
+      for (const [hwId, mapping] of gameState.deviceMappings.entries()) {
+        const isWeb = hwId.startsWith('Virtual_') || hwId.startsWith('Mobile_');
+        // While web buzzers are switched off the server holds them at 'ignore';
+        // that is not a team mapping, so leave it in place.
+        const target = (isWeb && !gameState.virtualBuzzersEnabled) ? 'ignore' : 'unassigned';
+        if (mapping.teamId !== target) unmapped++;
+        mapping.teamId = target;
+        // Also forget where they used to be. Switching web buzzers back on
+        // restores previousTeamId, which would otherwise undo this reset.
+        mapping.previousTeamId = 'unassigned';
+      }
+
+      console.log(`[CONFIG] Teams reset by host: names restored, ${unmapped} buzzer(s) unmapped`);
+      slackPost('ops', `:recycle: Moderator reset all teams and assignments (${unmapped} buzzer(s) unmapped)`);
+      if (unmapped > 0) slackPost('live', `:recycle: Teams reset — names restored and ${unmapped} buzzer(s) unassigned`);
       broadcastDeviceList();
       break;
     }
@@ -1079,10 +1215,16 @@ function handleMessage(ws, data) {
 
       console.log(`\n[ROUND START] Host initiated open buzzers!`);
       {
-        const playing = [...gameState.deviceMappings.values()]
-          .filter(m => m.teamId !== 'ignore' && m.teamId !== 'unassigned').length;
-        slackPost('live', `:rotating_light: *Buzzers open* — ${playing} buzzer(s) in play`, true);
-        slackPost('ops', `:rotating_light: Moderator opened buzzers (${playing} in play)`);
+        // deviceMappings remembers every device ever given a team, so that a
+        // reconnecting buzzer gets its identity back. It is not a list of who
+        // is here now, so count only devices that are currently connected.
+        let inPlay = 0;
+        for (const [id, m] of gameState.deviceMappings.entries()) {
+          if (m.teamId === 'ignore' || m.teamId === 'unassigned') continue;
+          if (gameState.connectedDevices.has(id)) inPlay++;
+        }
+        slackPost('live', `:rotating_light: *Buzzers open* — ${inPlay} buzzer(s) in play`, true);
+        slackPost('ops', `:rotating_light: Moderator opened buzzers (${inPlay} in play)`);
       }
 
       broadcast({
@@ -1132,9 +1274,21 @@ function handleMessage(ws, data) {
         return;
       }
 
-      const rawPressTime = Number(data.clientPressTime);
+      let rawPressTime = Number(data.clientPressTime);
       const clockOffset = Number(data.clockOffset) || 0;
       if (isNaN(rawPressTime)) return;
+
+      // Newer firmware also sends the press in microseconds. The millisecond
+      // field alone put two buzzes within the same millisecond on an identical
+      // time and left the server to break the tie by arrival order. Use the
+      // microsecond value when it agrees with the millisecond one (a mismatch
+      // means something is wrong with it), and fall back otherwise.
+      let pressPrecision = 'ms';
+      const pressUs = Number(data.clientPressTimeUs);
+      if (Number.isFinite(pressUs) && pressUs > 0 && Math.abs(pressUs / 1000 - rawPressTime) <= 2) {
+        rawPressTime = pressUs / 1000;
+        pressPrecision = 'us';
+      }
 
       const teamMeta = gameState.teams[mapping.teamId] || { teamName: `Team ${mapping.teamId}` };
 
@@ -1212,7 +1366,7 @@ function handleMessage(ws, data) {
           earlyMs: earlyMs
         };
         gameState.fouls.push(foulRecord);
-        slackPost('live', `:warning: *${mapping.displayName}* (${teamMeta.teamName}) jumped the light by ${(earlyMs / 1000).toFixed(3)}s`, true);
+        slackPost('live', `:warning: *${mapping.displayName}* (${teamMeta.teamName}) jumped the light by ${fmtSeconds(earlyMs)}s`, true);
         broadcast({ type: 'FOUL_EVENT', foul: foulRecord });
         return;
       }
@@ -1227,34 +1381,28 @@ function handleMessage(ws, data) {
         rawPressTime,
         clockOffset,
         trueBuzzServerTime,
-        reactionTimeMs: parseFloat(reactionTimeMs.toFixed(2))
+        reactionTimeMs: parseFloat(reactionTimeMs.toFixed(3)),
+        precision: pressPrecision,
+        seq: ++buzzArrivalSeq,
+        // early presses by this device earlier in the same round
+        earlyPresses: slackPrematureCount.get(hwId) || 0
       };
 
       gameState.buzzes.push(buzzRecord);
-      gameState.buzzes.sort((a, b) => a.trueBuzzServerTime - b.trueBuzzServerTime);
+      // Order by the time the press happened. Only if two are exactly equal
+      // does arrival order decide, and buildRankings flags those as a tie
+      // rather than presenting arrival order as a verdict.
+      gameState.buzzes.sort((a, b) =>
+        (a.trueBuzzServerTime - b.trueBuzzServerTime) || (a.seq - b.seq));
 
-      const winningTime = gameState.buzzes[0].trueBuzzServerTime;
-      const rankings = gameState.buzzes.map((entry, index) => ({
-        rank: index + 1,
-        hardwareId: entry.hardwareId,
-        displayName: entry.displayName,
-        teamName: entry.teamName,
-        reactionTimeMs: entry.reactionTimeMs,
-        behindWinnerMs: parseFloat((entry.trueBuzzServerTime - winningTime).toFixed(2))
-      }));
+      const rankings = buildRankings(gameState.buzzes);
 
-      {
-        const place = rankings.find(r => r.hardwareId === hwId);
-        const secs = (buzzRecord.reactionTimeMs / 1000).toFixed(3);
-        slackPost('live', place && place.rank === 1
-          ? `:bell: *${buzzRecord.displayName}* (${buzzRecord.teamName}) buzzed in first — *${secs}s*`
-          : `:arrow_right_hook: ${place ? place.rank : '?'}. *${buzzRecord.displayName}* (${buzzRecord.teamName}) — ${secs}s _+${place ? place.behindWinnerMs.toFixed(0) : '?'}ms_`,
-          true);
-      }
+      reportBuzzToSlack(buzzRecord, rankings);
 
       broadcast({
         type: 'RANKINGS_UPDATE',
         rankings: rankings,
+        tieThresholdMs: TIE_THRESHOLD_MS,
         latestBuzz: buzzRecord
       });
       break;
