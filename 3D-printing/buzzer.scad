@@ -1,4 +1,4 @@
-/* Rule4 Buzzer Enclosure (V5.0 - Interior Face Engraved Text) */
+/* Buzzer Enclosure */
 $fn = 64;
 
 // --- DIMENSIONS ---
@@ -133,12 +133,12 @@ module top_shell() {
         }
             
         // ==========================================
-        // RULE4 LOGO EMBOSS
+        // LOGO EMBOSS
         // ==========================================
-        translate([18, 15, height - 1.2]) 
-            linear_extrude(height = 3) 
-            scale([1.05, 1.05, 1]) 
-            import("rule4_logo.svg");
+        // translate([18, 15, height - 1.2]) 
+        //     linear_extrude(height = 3) 
+        //     scale([1.05, 1.05, 1]) 
+        //     import("your_logo_here.svg");
 
         // ==========================================
         // M3 HEAT-SET INSERT PILOT HOLES
